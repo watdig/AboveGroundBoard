@@ -57,6 +57,20 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define MCU_DCV_A_Pin GPIO_PIN_0
+#define MCU_DCV_A_GPIO_Port GPIOB
+#define MCU_DCV_B_Pin GPIO_PIN_1
+#define MCU_DCV_B_GPIO_Port GPIOB
+#define HPU_Gate_Pin GPIO_PIN_12
+#define HPU_Gate_GPIO_Port GPIOB
+#define Oil_High_Pin GPIO_PIN_15
+#define Oil_High_GPIO_Port GPIOA
+#define Oil_Low_Pin GPIO_PIN_0
+#define Oil_Low_GPIO_Port GPIOD
+#define Oil_E_Stop_Pin GPIO_PIN_1
+#define Oil_E_Stop_GPIO_Port GPIOD
+#define Water_Solinoid_Pin GPIO_PIN_2
+#define Water_Solinoid_GPIO_Port GPIOD
 
 /* USER CODE BEGIN Private defines */
 
