@@ -36,7 +36,15 @@ extern "C" {
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-
+typedef enum holding_register_e
+{
+	MODBUS_ID,
+	MB_BAUD_RATE,
+	GPIO_READ,
+	GPIO_WRITE,
+	WDG_TIMEOUT,
+	NUM_HOLDING_REGISTERS
+}holding_register_t;
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
