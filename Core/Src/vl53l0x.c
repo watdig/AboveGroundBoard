@@ -51,7 +51,6 @@ static uint32_t timeoutMicrosecondsToMclks(uint32_t timeout_period_us, uint8_t v
 void writeReg(uint8_t reg, uint8_t value) {
 
   msgBuffer[0] = value; // Assign the value to the buffer.
-  i2cStat = HAL_I2C_Mem_Write(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_WRITE, reg, 1, msgBuffer, 1, I2C_TIMEOUT);
   i2cStat = HAL_I2C_Mem_Write_DMA(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_WRITE, reg, 1, msgBuffer, 1);
 }
 
@@ -59,21 +58,22 @@ void writeReg(uint8_t reg, uint8_t value) {
 void writeReg16Bit(uint8_t reg, uint16_t value){
 
   memcpy(msgBuffer, &value, 2); // Assign the value to the buffer.
-  i2cStat = HAL_I2C_Mem_Write(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_WRITE, reg, 1, msgBuffer, 2, I2C_TIMEOUT);
+  i2cStat = HAL_I2C_Mem_Write_DMA(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_WRITE, reg, 1, msgBuffer, 2);
 }
 
 // Write a 32-bit register
 void writeReg32Bit(uint8_t reg, uint32_t value){
 
   memcpy(msgBuffer, &value, 4); // Assign the value to the buffer.
-  i2cStat = HAL_I2C_Mem_Write(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_WRITE, reg, 1, msgBuffer, 4, I2C_TIMEOUT);
+  i2cStat = HAL_I2C_Mem_Write_DMA(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_WRITE, reg, 1, msgBuffer, 4);
+
 }
 
 // Read an 8-bit register
 uint8_t readReg(uint8_t reg) {
   uint8_t value;
 
-  i2cStat = HAL_I2C_Mem_Read(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_READ, reg, 1, msgBuffer, 1, I2C_TIMEOUT);
+  i2cStat = HAL_I2C_Mem_Read_DMA(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_READ, reg, 1, msgBuffer, 1);
   value = msgBuffer[0];
 
   return value;
@@ -83,7 +83,7 @@ uint8_t readReg(uint8_t reg) {
 uint16_t readReg16Bit(uint8_t reg) {
   uint16_t value;
 
-  i2cStat = HAL_I2C_Mem_Read(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_READ, reg, 1, msgBuffer, 2, I2C_TIMEOUT);
+  i2cStat = HAL_I2C_Mem_Read_DMA(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_READ, reg, 1, msgBuffer, 2);
   memcpy(&value, msgBuffer, 2);
 
   return value;
@@ -92,7 +92,7 @@ uint16_t readReg16Bit(uint8_t reg) {
 // Read a 32-bit register
 uint32_t readReg32Bit(uint8_t reg) {
   uint32_t value;
-  i2cStat = HAL_I2C_Mem_Read(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_READ, reg, 1, msgBuffer, 4, I2C_TIMEOUT);
+  i2cStat = HAL_I2C_Mem_Read_DMA(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_READ, reg, 1, msgBuffer, 4);
   memcpy(&value, msgBuffer, 4);
 
   return value;
@@ -103,14 +103,14 @@ uint32_t readReg32Bit(uint8_t reg) {
 void writeMulti(uint8_t reg, uint8_t const *src, uint8_t count){
 
   memcpy(msgBuffer, src, 4);
-  i2cStat = HAL_I2C_Mem_Write(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_WRITE, reg, 1, msgBuffer, count, I2C_TIMEOUT);
+  i2cStat = HAL_I2C_Mem_Write_DMA(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_WRITE, reg, 1, msgBuffer, count, I2C_TIMEOUT);
 }
 
 // Read an arbitrary number of bytes from the sensor, starting at the given
 // register, into the given array
 void readMulti(uint8_t reg, uint8_t * dst, uint8_t count) {
 
-	i2cStat = HAL_I2C_Mem_Read(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_READ, reg, 1, dst, count, I2C_TIMEOUT);
+	i2cStat = HAL_I2C_Mem_Read_DMA(&VL53L0X_I2C_Handler, g_i2cAddr | I2C_READ, reg, 1, dst, count, I2C_TIMEOUT);
 }
 
 
