@@ -40,20 +40,53 @@ typedef enum holding_register_e
 {
 	MODBUS_ID,
 	MB_BAUD_RATE,
+	MB_TRANSMIT_TIMEOUT,
+	MB_TRANSMIT_RETRIES,
+	MB_ERRORS,
+	I2C_ERRORS,
+	I2C_SHUTDOWN,
+	ADC_0,
+	ADC_1,
+	ADC_2,
+	LASER_DIS,
 	GPIO_READ,
 	GPIO_WRITE,
-	WDG_TIMEOUT,
 	NUM_HOLDING_REGISTERS
 }holding_register_t;
+
+typedef enum gpio_read_e
+{
+	OIL_HIGH,
+	OIL_LOW,
+	OIL_ESTOP,
+	NUM_GPIO_READ_PINS
+}gpio_read_t;
+
+typedef enum gpio_write_e
+{
+	MCU_DVA_A,
+	MCU_DVA_B,
+	HPU_GATE,
+	WATER_SOLINOID,
+	NUM_GPIO_WRITE_PINS
+}gpio_write_t;
+
+
+
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
-#define NUM_HOLDING_REGISTERS 59
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
+// GPIO_WRITE MASKS
+#define MCU_DVA_MASK_A (1 << MCU_DVA_A)
+#define MCU_DVA_MASK_B (1 << MCU_DVA_B)
+#define HPU_GATE_MASK (1 << HPU_GATE)
+#define WATER_SOLINOID_MASK (1 << WATER_SOLINOID)
+
 
 /* USER CODE END EM */
 

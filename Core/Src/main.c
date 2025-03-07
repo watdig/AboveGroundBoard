@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "modbus.h"
+#include "vl53l0x.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,47 +49,23 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 uint16_t holding_register_database[NUM_HOLDING_REGISTERS] = {
-		0x0001,	// SLAVE_ID
+		0x0001,	// MODBUS_ID
 		0x0003, // BAUD_RATE
-		0x0000, // AUTOPILOT
+		   100, // Timeout
+		     2, // MB Retry
+		0x0000, // MB_ERRORS
+
+		0x0000, // I2C_ERRORS
+		0x0000, // I2C_SHUTDOWN
 
 		0xFFFF, // ADC 0
 		0xFFFF, // ADC 1
 		0xFFFF, // ADC 2
-		0xFFFF, // ADC 3
-		0xFFFF, // ADC 4
-		0xFFFF, // ADC 5
-		0xFFFF, // ADC 6
-		0xFFFF, // ADC 7
-		0xFFFF, // ADC 8
 
-		0xFFFF, 0xFFFF, // Accelerometer X
-		0xFFFF, 0xFFFF, // Accelerometer Y
-		0xFFFF, 0xFFFF, // Accelerometer Z
-		0xFFFF, 0xFFFF, // Magnetometer X
-		0xFFFF, 0xFFFF, // Magnetometer Y
-		0xFFFF, 0xFFFF, // Magnetometer Z
-		0xFFFF, 0xFFFF, // Gyroscope X
-		0xFFFF, 0xFFFF, // Gyroscope Y
-		0xFFFF, 0xFFFF, // Gyroscope Z
+		0xFFFF, //Laser Distance Sensor
+		0x0000, //GPIO Read
+		0x0000, //GPIO Write
 
-		0xFFFF, 0xFFFF, // Euler Heading
-		0xFFFF, 0xFFFF, // Euler Roll
-		0xFFFF, 0xFFFF, // Euler Pitch
-		0xFFFF, 0xFFFF, // Linear Acceleration X
-		0xFFFF, 0xFFFF, // Linear Acceleration Y
-		0xFFFF, 0xFFFF, // Linear Acceleration Z
-		0xFFFF, 0xFFFF, // Gravity X
-		0xFFFF, 0xFFFF, // Gravity Y
-		0xFFFF, 0xFFFF, // Gravity Z
-		0xFFFF, 0xFFFF, // Quarternion X
-		0xFFFF, 0xFFFF, // Quarternion Y
-		0xFFFF, 0xFFFF, // Quarternion Z
-		0xFFFF, 0xFFFF, // Quarternion W
-
-		0xFFFF, // Actuator A Target
-		0xFFFF, // Actuator B Target
-		0xFFFF, // Actuator C Target
 };
 /* USER CODE END PV */
 
@@ -141,16 +118,28 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
-  if(modbus_set_rx(255) != HAL_OK)
-   {
- 	  Error_Handler();
-   }
+  // Initialise the VL53L0X
+  	statInfo_t_VL53L0X distanceStr;
+  	initVL53L0X(1, &hi2c1);
+
+  	// Configure the sensor for high accuracy and speed in 20 cm.
+  	setSignalRateLimit(200);
+  	setVcselPulsePeriod(VcselPeriodPreRange, 10);
+  	setVcselPulsePeriod(VcselPeriodFinalRange, 14);
+  	setMeasurementTimingBudget(300 * 1000UL);
+
+  	uint16_t distance;
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  	// uint16_t distance is the distance in millimeters.
+		// statInfo_t_VL53L0X distanceStr is the statistics read from the sensor.
+		distance = readRangeSingleMillimeters(&distanceStr);
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

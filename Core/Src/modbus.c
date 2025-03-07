@@ -3,37 +3,70 @@
  *
  *  Created on: Oct 15, 2024
  *      Author: Victor Kalenda
+ *
  */
 
 #include "modbus.h"
 #include "error_codes.h"
-//#include "usart.h"
 #include "main.h"
 #include <stdint.h>
+#include <string.h>
 
-
+// Macros
 #define TX_BUFFER_SIZE  RX_BUFFER_SIZE
 #define MODBUS_TX_BUFFER_SIZE 256
 #define MODBUS_RX_BUFFER_SIZE  256
-
-uint8_t modbus_rx_buffer[MODBUS_RX_BUFFER_SIZE];
-uint8_t modbus_tx_buffer[MODBUS_TX_BUFFER_SIZE];
-uint16_t tx_buffer[TX_BUFFER_SIZE];
-uint16_t rx_buffer[RX_BUFFER_SIZE];
-
-uint32_t response_interval = 1000;
-uint32_t time = 0;
-volatile uint8_t rx_int = 0;
-volatile uint8_t tx_int = 0;
-
-extern UART_HandleTypeDef huart1;
-extern uint16_t holding_register_database[];
-
 #define high_byte(value) ((value >> 8) & 0xFF)
 #define low_byte(value) (value & 0xFF)
 #define word(value1, value2) (((value1 >> 8) & 0xFF) | (value2 & 0xFF))
 
+
+// Buffer variables
+uint8_t modbus_rx_buffer[MODBUS_RX_BUFFER_SIZE];
+uint8_t modbus_tx_buffer[MODBUS_TX_BUFFER_SIZE];
+uint8_t rx_chunk[MODBUS_RX_BUFFER_SIZE - 6];
+#ifdef MB_MASTER
+uint16_t tx_buffer[TX_BUFFER_SIZE]; // Master
+uint16_t response_buffer[RX_BUFFER_SIZE]; // Master
+
+// Master Response variables
+uint8_t target_id = 0;
+uint8_t target_function_code = 0;
+uint16_t expected_rx_len = 0;
+uint8_t response_rx = 0;
+
+// Timing Variables
+uint32_t rx_time = 0;
+uint32_t response_interval = 1000;
+#endif // MB_MASTER
+uint32_t tx_time = 0;
+volatile uint32_t chunk_time = 0;
+
+// Interrupt Handling Variables
+volatile uint16_t start_index = 0;
+volatile uint16_t chunk_start_i = 0;
+volatile uint16_t chunk_end_i = 0;
+volatile uint16_t modbus_header = 1;
+volatile uint8_t uart_rx_int = 0;
+volatile uint8_t uart_tx_int = 1;
+volatile uint8_t uart_err_int = 0;
+
+// External Variables
+extern UART_HandleTypeDef huart1;
+extern DMA_HandleTypeDef hdma_adc1;
+extern DMA_HandleTypeDef hdma_i2c1_rx;
+extern DMA_HandleTypeDef hdma_usart1_rx;
+extern DMA_HandleTypeDef hdma_usart1_tx;
+extern uint16_t holding_register_database[];
+extern uint8_t low_half_safe;
+extern ADC_HandleTypeDef hadc1;
+extern I2C_HandleTypeDef hi2c1;
+extern volatile uint8_t i2c_uart_rx_int;
+
+// Private Functions
 uint16_t crc_16(uint8_t *data, uint8_t size);
+int8_t handle_chunk_miss();
+void handle_range(uint16_t holding_register);
 
 /* Table of CRC values for high-order byte */
 static const uint8_t table_crc_hi[] = {
@@ -65,7 +98,7 @@ static const uint8_t table_crc_hi[] = {
     0x80, 0x41, 0x00, 0xC1, 0x81, 0x40
 };
 
-/* Table of CRC values for low-order byte */
+// Table of CRC values for low-order byte
 static const uint8_t table_crc_lo[] = {
     0x00, 0xC0, 0xC1, 0x01, 0xC3, 0x03, 0x02, 0xC2, 0xC6, 0x06,
     0x07, 0xC7, 0x05, 0xC5, 0xC4, 0x04, 0xCC, 0x0C, 0x0D, 0xCD,
@@ -95,55 +128,89 @@ static const uint8_t table_crc_lo[] = {
     0x43, 0x83, 0x41, 0x81, 0x80, 0x40
 };
 
-
-// Recieve Interrupt Handler
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+/*
+ * Modbus reception handler function
+ */
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-	rx_int = 1;
+	if(huart->Instance == USART1)
+	{
+		chunk_start_i = chunk_end_i;  // Update the last position before copying new data
+
+		/*
+		 * If the data is large and it is about to exceed the buffer size, we have to route it to the start of the buffer
+		 * This is to maintain the circular buffer
+		 * The old data in the main buffer will be overlapped
+		 */
+		if (chunk_start_i + Size > MODBUS_RX_BUFFER_SIZE)  // If the current position + new data size is greater than the main buffer
+		{
+			uint16_t datatocopy = MODBUS_RX_BUFFER_SIZE - chunk_start_i;  // find out how much space is left in the main buffer
+			memcpy ((uint8_t *)(modbus_rx_buffer + chunk_start_i), rx_chunk, datatocopy);  // copy data in that remaining space
+
+			chunk_end_i = (Size - datatocopy);  // update the position
+			memcpy ((uint8_t *)modbus_rx_buffer, (uint8_t *)(rx_chunk + datatocopy), chunk_end_i);  // copy the remaining data
+		}
+
+		/*
+		 * If the current position + new data size is less than the main buffer
+		 * we will simply copy the data into the buffer and update the position
+		 */
+		else
+		{
+			memcpy ((uint8_t *)(modbus_rx_buffer + chunk_start_i), rx_chunk, Size);
+			chunk_end_i = Size + chunk_start_i;
+		}
+
+		if(modbus_header)
+		{
+			// Log the time for chunk miss error handling
+			chunk_time = HAL_GetTick();
+
+			start_index = chunk_start_i;
+			modbus_header = 0;
+
+			// Setup the DMA to receive the # message bytes + crc + 1 in the event that the # bytes is in the message
+			HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rx_chunk, (uint16_t)(((rx_chunk[4] << 8) | rx_chunk[5])*2 + 2 + 1));
+			__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
+		}
+		else
+		{
+			/*
+			 * This is where the message officially completes being received
+			 * For Masters: Don't set up a reception, modbus stays in idle until you transmit a command again
+			 * For Slaves: Don't set up reception since you will need to transmit a response first
+			 * Use modbus_set_rx(); as the user to re-enable receive mode
+			 */
+			modbus_header = 1;
+			uart_rx_int = 1;
+		}
+	}
 }
 
-// Transmit Interrupt Handler
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-	tx_int = 1;
+	uart_tx_int = 1;
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+	uart_err_int = 1;
 }
 
 
-
-
-
-
-// Modbus Buffer Functions --------------------------------------------------------------------
-
-/**
-	Modbus get the data received through modbus
-*/
+// Modbus Master Functions --------------------------------------------------------------------
+#ifdef MB_MASTER
 uint16_t get_response_buffer(uint8_t index)
 {
 	if (index < RX_BUFFER_SIZE - 1)
 	{
 		// get the value in the uart recieve buffer
-		return rx_buffer[index];
+		return response_buffer[index];
 	}
 	return 0xFFFF;
 }
 
-/*
-	Modbus get the raw message received through UART
- */
-uint8_t get_rx_buffer(uint8_t index)
-{
-	if (index < MODBUS_RX_BUFFER_SIZE - 1)
-	{
-		return modbus_rx_buffer[index];
-	}
-	return 0xFF;
-}
-
-/**
-	Place data in transmit buffer
-*/
-int8_t set_tx_buffer(uint8_t index, uint16_t value)
+int8_t set_transmit_buffer(uint8_t index, uint16_t value)
 {
 	if (index < TX_BUFFER_SIZE)
 	{
@@ -152,21 +219,10 @@ int8_t set_tx_buffer(uint8_t index, uint16_t value)
 	}
 	else
 	{
-		return RANGE_ERROR;
+		return handle_modbus_error(RANGE_ERROR);
 	}
 }
 
-
-
-
-
-
-
-// Modbus Master Functions --------------------------------------------------------------------
-
-/**
-	Modbus Master reading holding registers
-*/
 int8_t read_holding_registers(uint16_t read_address, uint16_t read_quantity, uint8_t id)
 {
 	if(read_quantity > RX_BUFFER_SIZE)
@@ -184,29 +240,18 @@ int8_t read_holding_registers(uint16_t read_address, uint16_t read_quantity, uin
 	modbus_tx_buffer[index++] = high_byte(read_quantity);
 	modbus_tx_buffer[index++] = low_byte(read_quantity);
 
-	int8_t status = modbus_send(modbus_tx_buffer, index);
+	int8_t status = modbus_send(index);
 	if(status != HAL_OK)
 	{
 		return status;
 	}
-	// Wait for a response
-	uint16_t rx_len = 0;
-	status = modbus_poll_for_response(3 + read_quantity * 2 + 2, &rx_len);
-	if(status != HAL_OK)
-	{
-		return status;
-	}
-
-	status = modbus_mic(id, 0x03, rx_len);
-
-	store_rx_buffer();
-
-	return status;
+	// Setup the master to expect a response
+	target_id = id;
+	target_function_code = 0x03;
+	expected_rx_len = 3 + read_quantity * 2 + 2; // This will enable rx timeout monitoring
+	return modbus_set_rx();
 }
 
-/**
-	Modbus master Write multiple holding registers function
-*/
 int8_t write_multiple_registers(uint16_t write_address, uint16_t write_quantity, uint8_t id)
 {
 	uint8_t index = 0;
@@ -215,92 +260,71 @@ int8_t write_multiple_registers(uint16_t write_address, uint16_t write_quantity,
 	// Append Function
 	modbus_tx_buffer[index++] = 0x10;
 	// Append the Write Address (high byte then low byte)
-	modbus_tx_buffer[index++] = high_byte(write_address);	modbus_tx_buffer[index++] = low_byte(write_address);
-	// Append the quantity of registers to be read (high byte then low byte)
+	modbus_tx_buffer[index++] = high_byte(write_address);
+	modbus_tx_buffer[index++] = low_byte(write_address);
+	// Append the quantity of registers to be written (high byte then low byte)
 	modbus_tx_buffer[index++] = high_byte(write_quantity);
 	modbus_tx_buffer[index++] = low_byte(write_quantity);
 	// Append the tx_buffer (high byte then low byte
-	for(uint8_t i = 0; i < low_byte(write_quantity); i++)
+	for(uint8_t i = 0; i < write_quantity; i++)
 	{
 		modbus_tx_buffer[index++] = high_byte(tx_buffer[i]);
 		modbus_tx_buffer[index++] = low_byte(tx_buffer[i]);
 	}
 
-	int8_t status = modbus_send(modbus_tx_buffer, index);
+	int8_t status = modbus_send(index);
 	if(status != HAL_OK)
 	{
 		return status;
 	}
 	// Wait for a response
-	uint16_t rx_len = 0;
-	status = modbus_poll_for_response(8, &rx_len);
-	if(status != HAL_OK)
-	{
-		return status;
-	}
-	return modbus_mic(id, 0x10, rx_len);
+	target_id = id;
+	target_function_code = 0x10;
+	expected_rx_len = 8;
+	return modbus_set_rx();
 }
 
-/*
-	Modbus Master message integrity check
- */
 int8_t modbus_mic(uint8_t id, uint8_t function_code, uint8_t size)
 {
 	// Check the slave ID
-	if(modbus_rx_buffer[0] != id)
+	if(get_rx_buffer(0) != id)
 	{
-		return MB_SLAVE_ID_MISMATCH;
+		return handle_modbus_error(MB_SLAVE_ID_MISMATCH);
 	}
 	// Check the function code
-	if((modbus_rx_buffer[1] & 0x7F) != function_code)
+	if((get_rx_buffer(1) & 0x7F) != function_code)
 	{
-		return MB_FUNCTION_MISMATCH;
+		return handle_modbus_error(MB_FUNCTION_MISMATCH);
 	}
 
 	// Check the modbus exception codes within the response if there is some sort of execution error
-	if(((modbus_rx_buffer[1] >> 7) & 0x01))
+	if(((get_rx_buffer(1) >> 7) & 0x01))
 	{
-		return modbus_rx_buffer[2] + 0x03;
+		return get_rx_buffer(2) + 0x03;
 	}
 
 	// Check the CRC
 	if(size >= 5)
 	{
 		uint16_t crc = crc_16(modbus_rx_buffer, size - 2);
-		if((low_byte(crc) != modbus_rx_buffer[size - 2]) || (high_byte(crc) != modbus_rx_buffer[size - 1]))
+		if((low_byte(crc) != get_rx_buffer(size - 2)) || (high_byte(crc) != get_rx_buffer(size - 1)))
 		{
-			return MB_INVALID_CRC;
+			return handle_modbus_error(MB_INVALID_CRC);
 		}
 	}
 	return MB_SUCCESS;
 }
 
-/*
-	Modbus Master wait for a response from a slave after a request
- */
-int8_t modbus_poll_for_response(uint8_t size, uint16_t *rx_len)
+uint8_t response_received()
 {
-	int8_t status = HAL_OK;
-	status = HAL_UART_Receive_IT(&huart1, modbus_rx_buffer, size);
-	if(status != HAL_OK)
+	if(response_rx)
 	{
-		return status;
+		response_rx = 0;
+		return 1;
 	}
-	while(!rx_int && (HAL_GetTick()) - time < response_interval);
-	if(rx_int)
-	{
-		rx_int = 0;
-		return HAL_OK;
-	}
-	else
-	{
-		return HAL_TIMEOUT;
-	}
+	return 0;
 }
 
-/*
-	Modbus Master set the timeout for how long a slave has to respond to a request
- */
 void set_response_interval(uint32_t delay)
 {
 	response_interval = delay;
@@ -311,21 +335,40 @@ uint32_t get_response_interval()
 	return response_interval;
 }
 
-
-
+void store_rx_buffer()
+{
+	// Store the messages data in the response_buffer
+	for(uint8_t i = 0; i < get_rx_buffer(2); i++)
+	{
+		if(i < RX_BUFFER_SIZE)
+		{
+			response_buffer[i] = (get_rx_buffer(2 * i + 3) << 8) | get_rx_buffer(2 * i + 4);
+		}
+	}
+}
+#endif // MB_MASTER
 
 // Modbus Slave Functions ---------------------------------------------------------------------
 
-/*
-	Modbus Slave Return Multiple holding registers
- */
-int8_t return_holding_registers()
+#ifdef MB_SLAVE
+uint8_t modbus_rx()
 {
+	if(uart_rx_int)
+	{
+		uart_rx_int = 0;
+		return 1;
+	}
+	return 0;
+}
+
+int8_t return_holding_registers(uint8_t* tx_len)
+{
+	(*tx_len) = 0;
 	// Handle Error Checking
-	uint16_t first_register_address = (modbus_rx_buffer[2] << 8) | modbus_rx_buffer[3];
+	uint16_t first_register_address = (get_rx_buffer(2) << 8) | get_rx_buffer(3);
 
 	// Get the number of registers requested by the master
-	uint16_t num_registers = (modbus_rx_buffer[4] << 8) | modbus_rx_buffer[5];
+	uint16_t num_registers = (get_rx_buffer(4) << 8) | get_rx_buffer(5);
 
 	if(num_registers > RX_BUFFER_SIZE || num_registers < 1) // 125 is the limit according to modbus protocol
 	{
@@ -341,30 +384,49 @@ int8_t return_holding_registers()
 
 	// Return register values
 
-	modbus_tx_buffer[0] = modbus_rx_buffer[0]; // Append Slave id
-	modbus_tx_buffer[1] = modbus_rx_buffer[1]; // Append Function Code
+	modbus_tx_buffer[0] = get_rx_buffer(0); // Append Slave id
+	modbus_tx_buffer[1] = get_rx_buffer(1); // Append Function Code
 	modbus_tx_buffer[2] = num_registers * 2; // Append number of bytes
-	uint8_t index = 3;
+	(*tx_len) = 3;
+
+	if(((first_register_address >= ADC_0) && (first_register_address <= ADC_2)) ||
+		((last_register_address >= ADC_0) && (last_register_address <= ADC_2)))
+	{
+		// disable the ADC DMA Stream
+//		if(HAL_DMA_Abort(&hdma_adc1) != HAL_OK)
+//		{
+//			return modbus_exception(MB_SLAVE_ERROR);
+//		}
+	}
+
 
 	// Append the Register Values
 	for(uint8_t i = 0; i < num_registers; i++)
 	{
-		modbus_tx_buffer[index++] = high_byte(holding_register_database[first_register_address + i]);
-		modbus_tx_buffer[index++] = low_byte(holding_register_database[first_register_address + i]);
+		modbus_tx_buffer[(*tx_len)++] = high_byte(holding_register_database[first_register_address + i]);
+		modbus_tx_buffer[(*tx_len)++] = low_byte(holding_register_database[first_register_address + i]);
 	}
 
-	return modbus_send(modbus_tx_buffer, index);
+	if(((first_register_address >= ADC_0) && (first_register_address <= ADC_2)) ||
+		((last_register_address >= ADC_0) && (last_register_address <= ADC_2)))
+	{
+		// enable the ADC DMA Stream
+//		if(HAL_ADC_Start_DMA(&hadc1, adc_buffer, 9) != HAL_OK)
+//		{
+//			return modbus_exception(MB_SLAVE_ERROR);
+//		}
+	}
+
+	return modbus_send((*tx_len));
 }
 
-/*
-	Modbus Slave Edit Multiple holding registers
- */
-int8_t edit_multiple_registers()
+int8_t edit_multiple_registers(uint8_t *tx_len)
 {
+	(*tx_len) = 0;
 	// Handle Error Checking
-	uint16_t first_register_address = (modbus_rx_buffer[2] << 8) | modbus_rx_buffer[3];
+	uint16_t first_register_address = (get_rx_buffer(2) << 8) | get_rx_buffer(3);
 
-	uint16_t num_registers = (modbus_rx_buffer[4] << 8) | modbus_rx_buffer[5];
+	uint16_t num_registers = (get_rx_buffer(4) << 8) | get_rx_buffer(5);
 
 	if(num_registers > 125 || num_registers < 1) // 125 is the limit according to modbus protocol
 	{
@@ -378,127 +440,267 @@ int8_t edit_multiple_registers()
 		return modbus_exception(MB_ILLEGAL_DATA_ADDRESS);
 	}
 
-	if((last_register_address <= 10 && last_register_address >= 2) 		||
-		(first_register_address <= 10 && first_register_address >= 2) 	||
-		(first_register_address < 2 && last_register_address > 10))
+	// Protect Read only values
+	if(((first_register_address >= ADC_0) && (first_register_address <= GPIO_READ)) ||
+		((last_register_address >= ADC_0) && (last_register_address <= GPIO_READ)))
 	{
-		// Ensure that ADC values are restricted to read-only
+		// Ensure that sensor values are restricted to read-only
 		return modbus_exception(MB_ILLEGAL_FUNCTION);
 	}
 
-
 	// Edit holding registers
-	modbus_tx_buffer[0] = modbus_rx_buffer[0]; // Append Slave id
-	modbus_tx_buffer[1] = modbus_rx_buffer[1]; // Append Function Code
-	modbus_tx_buffer[2] = num_registers * 2; // Append number of bytes
-	uint8_t index = 3;
+	modbus_tx_buffer[0] = get_rx_buffer(0); // Append Slave id
+	modbus_tx_buffer[1] = get_rx_buffer(1); // Append Function Code
+	// Append the Write Address (high byte then low byte)
+	modbus_tx_buffer[2] = get_rx_buffer(2);
+	modbus_tx_buffer[3] = get_rx_buffer(3);
+	// Append the quantity of registers to be written (high byte then low byte)
+	modbus_tx_buffer[4] = get_rx_buffer(4);
+	modbus_tx_buffer[5] = get_rx_buffer(5);
+	(*tx_len) = 6;
 
 	for(uint8_t i = 0; i < num_registers; i++)
 	{
-		holding_register_database[first_register_address + i] = (modbus_rx_buffer[2 * i + 6] << 8) | modbus_rx_buffer[2 * i + 7];
-		modbus_tx_buffer[index++] = high_byte(holding_register_database[first_register_address + i]);
-		modbus_tx_buffer[index++] = low_byte(holding_register_database[first_register_address + i]);
+		holding_register_database[first_register_address + i] = (get_rx_buffer(2 * i + 7) << 8) | get_rx_buffer(2 * i + 8);
+
+		// Handle the range boundaries of each writable register
+		handle_range(first_register_address + i);
 	}
 
-	return modbus_send(modbus_tx_buffer, index);
+	// TIMING WORKAROUND START
+//	HAL_Delay(1);
+	// TIMING WORKAROUND END
+
+	int8_t status = modbus_send((*tx_len));
+
+	if(status == MB_SUCCESS)
+	{
+		// Special Case Modbus Baud Rate Modification
+		if((first_register_address <= 1) && last_register_address >= 1)
+		{
+			return modbus_change_baud_rate();
+		}
+	}
+	return status;
 }
 
-/*
-	Modbus Slave Exception handler
- */
 int8_t modbus_exception(int8_t exception_code)
 {
-	modbus_tx_buffer[0] = modbus_rx_buffer[0];
-	modbus_tx_buffer[1] = modbus_rx_buffer[1] | 0x80;
+	modbus_tx_buffer[0] = get_rx_buffer(0);
+	modbus_tx_buffer[1] = get_rx_buffer(1) | 0x80;
 	modbus_tx_buffer[2] = exception_code - 3; // Subtract 3 to match the modbus defined error code value
 
-	return modbus_send(modbus_tx_buffer, 3);
+	return modbus_send(3);
 }
 
+void handle_range(uint16_t holding_register)
+{
+	switch(holding_register)
+	{
+		case MODBUS_ID:
+		{
+			if(holding_register_database[holding_register] > 0xFF)
+			{
+				holding_register_database[holding_register] = 0xFF;
+			}
+			break;
+		}
+		case MB_BAUD_RATE:
+		{
+			if(holding_register_database[holding_register] < BAUD_RATE_4800)
+			{
+				holding_register_database[holding_register] = BAUD_RATE_4800;
+			}
+			else if(holding_register_database[holding_register] > BAUD_RATE_256000)
+			{
+				holding_register_database[holding_register] = BAUD_RATE_256000;
+			}
+			break;
+		}
+		case MB_TRANSMIT_TIMEOUT:
+		{
+			if(holding_register_database[holding_register] < 5)
+			{
+				holding_register_database[holding_register] = 5;
+			}
+			else if(holding_register_database[holding_register] > 1000)
+			{
+				holding_register_database[holding_register] = 1000;
+			}
+			break;
+		}
+		case MB_TRANSMIT_RETRIES:
+		{
+			if(holding_register_database[holding_register] > 5)
+			{
+				holding_register_database[holding_register] = 5;
+			}
+			break;
+		}
+		case MB_ERRORS:
+		{
+			if(holding_register_database[holding_register] > 0x3FF)
+			{
+				holding_register_database[holding_register] = 0x3FF;
+			}
+			break;
+		}
+		case I2C_ERRORS:
+		{
+			if(holding_register_database[holding_register] > 0x7F)
+			{
+				holding_register_database[holding_register] = 0x7F;
+			}
+			break;
+		}
+		case I2C_SHUTDOWN:
+		{
+			if(holding_register_database[holding_register] > 1)
+			{
+				holding_register_database[holding_register] = 1;
+			}
+			break;
+		}
+		case GPIO_WRITE:
+		{
+			if(holding_register_database[holding_register] > 0xF)
+			{
+				holding_register_database[holding_register] = 0xF;
+			}
+			break;
+		}
 
-
+	}
+}
+#endif // MB_SLAVE
 
 // General Modbus Functions -------------------------------------------------------------------
 
-/*
-	General Modbus send function
- */
-int8_t modbus_send(uint8_t *data, uint8_t size)
+int8_t modbus_send(uint8_t size)
 {
-	// Append CRC (low byte then high byte)
-	uint16_t crc = crc_16(data, size);
-	data[size] = low_byte(crc);
-	data[size + 1] = high_byte(crc);
-
 	int8_t status = HAL_OK;
-	status = HAL_UART_Transmit_IT(&huart1, data, size + 2);
+	// Append CRC (low byte then high byte)
+	uint16_t crc = crc_16(modbus_tx_buffer, size);
+	modbus_tx_buffer[size] = low_byte(crc);
+	modbus_tx_buffer[size + 1] = high_byte(crc);
+
+	uart_tx_int = 0; // This will enable tx timeout monitoring
+	tx_time = HAL_GetTick();
+	status = HAL_UART_Transmit_DMA(&huart1, modbus_tx_buffer, size + 2);
+	__HAL_DMA_DISABLE_IT(&hdma_usart1_tx, DMA_IT_HT);
+	return status;
+}
+
+int8_t modbus_reset()
+{
+	int8_t status = 0;
+	status = HAL_UART_Abort(&huart1);
+	status |= HAL_UART_DeInit(&huart1);
+	__USART1_FORCE_RESET();
+	HAL_Delay(100);
+	__USART1_RELEASE_RESET();
+	status = HAL_RS485Ex_Init(&huart1, UART_DE_POLARITY_HIGH, 0, 0);
+	status |= HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8);
+	status |= HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8);
+	status |= HAL_UARTEx_DisableFifoMode(&huart1);
 	if(status != HAL_OK)
 	{
-		return status;
+		return handle_modbus_error(MB_FATAL_ERROR);
 	}
-	time = HAL_GetTick();
-	while(!tx_int && ((HAL_GetTick()) - time < 100));
-	if(tx_int)
-	{
-		tx_int = 0;
-		return HAL_OK;
-	}
-	else
-	{
-		return HAL_TIMEOUT;
-	}
+	return status;
 }
 
-/*
-	General Modbus check for reception function
- */
-uint8_t modbus_rx()
+int8_t modbus_set_rx()
 {
-	if(rx_int)
-	{
-		rx_int = 0;
-		return 1;
-	}
-	return rx_int;
+	int8_t status = HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rx_chunk, 6);
+	__HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
+
+	return status;
 }
 
-/*
-	General Modbus set chip in receive mode
- */
-int8_t modbus_set_rx(uint8_t size)
+int8_t monitor_modbus()
 {
-	return HAL_UARTEx_ReceiveToIdle_IT(&huart1, modbus_rx_buffer, size);
-	//return HAL_UART_Receive_IT(&huart1, modbus_rx_buffer, size);
-}
+	int8_t status = MB_SUCCESS;
 
-/*
-	General Modbus rx_buffer allocation function
- */
-void store_rx_buffer()
-{
-	// Store the messages data in the rx_buffer
-	for(uint8_t i = 0; i < (modbus_rx_buffer[2] /*>> 1*/); i++)
+	// Chunk miss handling
+	status = handle_chunk_miss();
+	if(status != MB_SUCCESS)
 	{
-		if(i < RX_BUFFER_SIZE)
+		status = modbus_reset();
+		if(status != MB_SUCCESS)
 		{
-			rx_buffer[i] = (modbus_rx_buffer[2 * i + 3] << 8) | modbus_rx_buffer[2 * i + 4];
+			return status;
 		}
-		// rx_buffer_len = i;
+		return handle_modbus_error(MB_UART_ERROR);
 	}
+
+	// Uart error handling
+	if(uart_err_int)
+	{
+		uart_err_int = 0;
+		status = modbus_reset();
+		if(status != MB_SUCCESS)
+		{
+			return status;
+		}
+		return handle_modbus_error(MB_UART_ERROR);
+	}
+
+	// TX timeout handling
+	if(!uart_tx_int)
+	{
+		if(HAL_GetTick() - tx_time >= holding_register_database[MB_TRANSMIT_TIMEOUT])
+		{
+			return handle_modbus_error(MB_TX_TIMEOUT);
+		}
+		status = HAL_BUSY;
+	}
+
+#ifdef MB_MASTER
+	// RX timeout handling
+	if(expected_rx_len > 0)
+	{
+		if(uart_rx_int)
+		{
+			uart_rx_int = 0;
+			status = modbus_mic(target_id, target_function_code, expected_rx_len);
+			target_id = 0;
+			target_function_code = 0;
+			expected_rx_len = 0;
+			if(status == MB_SUCCESS)
+			{
+				response_rx = 1;
+				if(target_function_code == 0x03)
+				{
+					store_rx_buffer();
+				}
+				return status;
+			}
+			return handle_modbus_error(MB_UART_ERROR);
+		}
+		else
+		{
+			if(HAL_GetTick() - rx_time >= response_interval)
+			{
+				target_id = 0;
+				target_function_code = 0;
+				expected_rx_len = 0;
+				return handle_modbus_error(MB_RX_TIMEOUT);
+			}
+			status = HAL_BUSY;
+		}
+	}
+#endif
+	return status;
 }
-
-
-
-
-
 
 // General Modbus Control Functions ------------------------------------------------------------
 
-int8_t modbus_change_baud_rate(uint8_t* baud_rate)
+int8_t modbus_change_baud_rate()
 {
 	int8_t status = 0;
 
-	switch((*baud_rate))
+	switch(holding_register_database[MB_BAUD_RATE])
 	{
 		case BAUD_RATE_4800:
 		{
@@ -542,24 +744,33 @@ int8_t modbus_change_baud_rate(uint8_t* baud_rate)
 		}
 		default:
 		{
-			(*baud_rate) = BAUD_RATE_9600;
+			holding_register_database[MB_BAUD_RATE] = BAUD_RATE_9600;
 			huart1.Init.BaudRate = 9600;
-			UART_SetConfig(&huart1);
+			status = UART_SetConfig(&huart1);
+			if(status == HAL_OK)
+			{
+				// Log error, reset UART
+				status = modbus_reset();
+				if(status != HAL_OK)
+				{
+					return status;
+				}
+			}
 			return MB_ILLEGAL_DATA_VALUE;
-			break;
 		}
-
 	}
 	status = UART_SetConfig(&huart1);
-
-	if(status != HAL_OK)
+	if(status == HAL_OK)
 	{
-		return status;
+		// Log error, reset UART
+		status = modbus_reset();
+		if(status != HAL_OK)
+		{
+			return status;
+		}
 	}
 
-	//status = HAL_UART_Receive_IT(huart, pData, Size)
-
-	return status;
+	return modbus_set_rx();
 }
 
 int8_t modbus_set_baud_rate(uint8_t baud_rate)
@@ -587,46 +798,30 @@ int8_t modbus_get_baud_rate(uint8_t* baud_rate)
 	/* Designed to hold baud rate in emulated EEPROM
 	*baud_rate = ee.modbus_baud_rate;
 	*/
-
 	return status;
 }
 
-uint8_t significant_error(int8_t status)
+
+// Low Level Functions -------------------------------------------------------------------------
+uint8_t get_rx_buffer(uint8_t index)
 {
-  switch(status)
-  {
-    case MB_ILLEGAL_FUNCTION ... MB_SLAVE_ERROR:
-    {
-      return 1;
-    }
-    case MB_ACK:
-    {
-      return 0;
-    }
-    case MB_SLAVE_BUSY ... MB_NEGATIVE_ACK:
-    {
-      return 1;
-    }
-    case MB_MEMORY_ERROR:
-    {
-      return 0;
-    }
-    case MB_GATEWAY_PATH_ERROR ... MB_FUNCTION_MISMATCH:
-    {
-      return 1;
-    }
-    case MB_INVALID_CRC:
-    {
-      return 0;
-    }
-    default:
-    {
-      return 0;
-    }
-  }
+	if (index < MODBUS_RX_BUFFER_SIZE - 1)
+	{
+		return ((start_index + index) > (MODBUS_RX_BUFFER_SIZE - 1))?
+				modbus_rx_buffer[(start_index + index) - MODBUS_RX_BUFFER_SIZE] :
+				modbus_rx_buffer[start_index + index];
+	}
+	return 0xFF;
 }
 
-// CRC Generation Function
+int8_t handle_modbus_error(int8_t error_code)
+{
+	holding_register_database[MB_ERRORS] |= 1U << (error_code - RANGE_ERROR);
+	return error_code;
+}
+
+// Private Functions ---------------------------------------------------------------------------
+
 uint16_t crc_16(uint8_t *data, uint8_t size)
 {
 	uint8_t crc_hi = 0xFF;
@@ -643,3 +838,22 @@ uint16_t crc_16(uint8_t *data, uint8_t size)
 
 	return (crc_hi << 8 | crc_low);
 }
+
+int8_t handle_chunk_miss()
+{
+	if(modbus_header == 0)
+	{
+		if(HAL_GetTick() - chunk_time > 10)
+		{
+			modbus_header = 1;
+			int8_t status = HAL_UART_Abort(&huart1);
+			if(status == HAL_OK)
+			{
+				status = modbus_set_rx();
+			}
+			return status;
+		}
+	}
+	return MB_SUCCESS;
+}
+
