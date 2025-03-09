@@ -195,6 +195,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
 	uart_err_int = 1;
+	__HAL_UART_DISABLE_IT(&huart1, UART_IT_MASK);
 }
 
 
@@ -390,7 +391,8 @@ int8_t return_holding_registers(uint8_t* tx_len)
 	(*tx_len) = 3;
 
 	if(((first_register_address >= ADC_0) && (first_register_address <= ADC_2)) ||
-		((last_register_address >= ADC_0) && (last_register_address <= ADC_2)))
+		 ((last_register_address >= ADC_0) && (last_register_address <= ADC_2)) ||
+		 ((first_register_address < ADC_0) && (last_register_address > ADC_2)))
 	{
 		// disable the ADC DMA Stream
 //		if(HAL_DMA_Abort(&hdma_adc1) != HAL_OK)
@@ -398,7 +400,15 @@ int8_t return_holding_registers(uint8_t* tx_len)
 //			return modbus_exception(MB_SLAVE_ERROR);
 //		}
 	}
-
+//	uint8_t prim = 0;
+	if(((first_register_address >= LASER_DISTANCE) && (first_register_address <= LASER_DISTANCE)) ||
+		 ((last_register_address >= LASER_DISTANCE) && (last_register_address <= LASER_DISTANCE)) ||
+		 ((first_register_address < LASER_DISTANCE) && (last_register_address > LASER_DISTANCE)))
+	{
+		// disable I2C interrupts
+//		prim = __get_PRIMASK();
+//		__disable_irq();
+	}
 
 	// Append the Register Values
 	for(uint8_t i = 0; i < num_registers; i++)
@@ -408,7 +418,8 @@ int8_t return_holding_registers(uint8_t* tx_len)
 	}
 
 	if(((first_register_address >= ADC_0) && (first_register_address <= ADC_2)) ||
-		((last_register_address >= ADC_0) && (last_register_address <= ADC_2)))
+		 ((last_register_address >= ADC_0) && (last_register_address <= ADC_2)) ||
+		 ((first_register_address < ADC_0) && (last_register_address > ADC_2)))
 	{
 		// enable the ADC DMA Stream
 //		if(HAL_ADC_Start_DMA(&hadc1, adc_buffer, 9) != HAL_OK)
@@ -416,7 +427,16 @@ int8_t return_holding_registers(uint8_t* tx_len)
 //			return modbus_exception(MB_SLAVE_ERROR);
 //		}
 	}
-
+	if(((first_register_address >= LASER_DISTANCE) && (first_register_address <= LASER_DISTANCE)) ||
+		 ((last_register_address >= LASER_DISTANCE) && (last_register_address <= LASER_DISTANCE)) ||
+		 ((first_register_address < LASER_DISTANCE) && (last_register_address > LASER_DISTANCE)))
+	{
+		// enable I2C interrupts
+//		if(prim == 0)
+//		{
+//			__enable_irq();
+//		}
+	}
 	return modbus_send((*tx_len));
 }
 
@@ -442,7 +462,8 @@ int8_t edit_multiple_registers(uint8_t *tx_len)
 
 	// Protect Read only values
 	if(((first_register_address >= ADC_0) && (first_register_address <= GPIO_READ)) ||
-		((last_register_address >= ADC_0) && (last_register_address <= GPIO_READ)))
+		 ((last_register_address >= ADC_0) && (last_register_address <= GPIO_READ)) ||
+		 ((first_register_address < ADC_0) && (last_register_address > GPIO_READ)))
 	{
 		// Ensure that sensor values are restricted to read-only
 		return modbus_exception(MB_ILLEGAL_FUNCTION);
@@ -569,7 +590,6 @@ void handle_range(uint16_t holding_register)
 			}
 			break;
 		}
-
 	}
 }
 #endif // MB_SLAVE
@@ -696,6 +716,39 @@ int8_t monitor_modbus()
 
 // General Modbus Control Functions ------------------------------------------------------------
 
+int8_t modbus_startup()
+{
+	int8_t status = HAL_RS485Ex_Init(&huart1, UART_DE_POLARITY_HIGH, 0, 0);
+	if(status != HAL_OK)
+	{
+		return status;
+	}
+	status = HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8);
+	if(status != HAL_OK)
+	{
+		return status;
+	}
+	status = HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8);
+	if(status != HAL_OK)
+	{
+		return status;
+	}
+	status = HAL_UARTEx_DisableFifoMode(&huart1);
+	return status;
+}
+
+int8_t modbus_shutdown()
+{
+	int8_t status = HAL_UART_AbortReceive(&huart1);
+	if(status != HAL_OK)
+	{
+		return status;
+	}
+	status = HAL_UART_DeInit(&huart1);
+
+	return status;
+}
+
 int8_t modbus_change_baud_rate()
 {
 	int8_t status = 0;
@@ -749,14 +802,13 @@ int8_t modbus_change_baud_rate()
 			status = UART_SetConfig(&huart1);
 			if(status == HAL_OK)
 			{
-				// Log error, reset UART
 				status = modbus_reset();
 				if(status != HAL_OK)
 				{
 					return status;
 				}
 			}
-			return MB_ILLEGAL_DATA_VALUE;
+			return handle_modbus_error(RANGE_ERROR);
 		}
 	}
 	status = UART_SetConfig(&huart1);

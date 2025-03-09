@@ -7,6 +7,7 @@
 C_SRCS += \
 ../Core/Src/main.c \
 ../Core/Src/modbus.c \
+../Core/Src/sensor_adc.c \
 ../Core/Src/stm32c0xx_hal_msp.c \
 ../Core/Src/stm32c0xx_it.c \
 ../Core/Src/syscalls.c \
@@ -17,6 +18,7 @@ C_SRCS += \
 OBJS += \
 ./Core/Src/main.o \
 ./Core/Src/modbus.o \
+./Core/Src/sensor_adc.o \
 ./Core/Src/stm32c0xx_hal_msp.o \
 ./Core/Src/stm32c0xx_it.o \
 ./Core/Src/syscalls.o \
@@ -27,6 +29,7 @@ OBJS += \
 C_DEPS += \
 ./Core/Src/main.d \
 ./Core/Src/modbus.d \
+./Core/Src/sensor_adc.d \
 ./Core/Src/stm32c0xx_hal_msp.d \
 ./Core/Src/stm32c0xx_it.d \
 ./Core/Src/syscalls.d \
@@ -42,7 +45,7 @@ Core/Src/%.o Core/Src/%.su Core/Src/%.cyclo: ../Core/Src/%.c Core/Src/subdir.mk
 clean: clean-Core-2f-Src
 
 clean-Core-2f-Src:
-	-$(RM) ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/modbus.cyclo ./Core/Src/modbus.d ./Core/Src/modbus.o ./Core/Src/modbus.su ./Core/Src/stm32c0xx_hal_msp.cyclo ./Core/Src/stm32c0xx_hal_msp.d ./Core/Src/stm32c0xx_hal_msp.o ./Core/Src/stm32c0xx_hal_msp.su ./Core/Src/stm32c0xx_it.cyclo ./Core/Src/stm32c0xx_it.d ./Core/Src/stm32c0xx_it.o ./Core/Src/stm32c0xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32c0xx.cyclo ./Core/Src/system_stm32c0xx.d ./Core/Src/system_stm32c0xx.o ./Core/Src/system_stm32c0xx.su ./Core/Src/vl53l0x.cyclo ./Core/Src/vl53l0x.d ./Core/Src/vl53l0x.o ./Core/Src/vl53l0x.su
+	-$(RM) ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/modbus.cyclo ./Core/Src/modbus.d ./Core/Src/modbus.o ./Core/Src/modbus.su ./Core/Src/sensor_adc.cyclo ./Core/Src/sensor_adc.d ./Core/Src/sensor_adc.o ./Core/Src/sensor_adc.su ./Core/Src/stm32c0xx_hal_msp.cyclo ./Core/Src/stm32c0xx_hal_msp.d ./Core/Src/stm32c0xx_hal_msp.o ./Core/Src/stm32c0xx_hal_msp.su ./Core/Src/stm32c0xx_it.cyclo ./Core/Src/stm32c0xx_it.d ./Core/Src/stm32c0xx_it.o ./Core/Src/stm32c0xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32c0xx.cyclo ./Core/Src/system_stm32c0xx.d ./Core/Src/system_stm32c0xx.o ./Core/Src/system_stm32c0xx.su ./Core/Src/vl53l0x.cyclo ./Core/Src/vl53l0x.d ./Core/Src/vl53l0x.o ./Core/Src/vl53l0x.su
 
 .PHONY: clean-Core-2f-Src
 

@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "modbus.h"
 #include "vl53l0x.h"
+#include "error_codes.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,36 +43,45 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
 
 I2C_HandleTypeDef hi2c1;
+DMA_HandleTypeDef hdma_i2c1_rx;
+DMA_HandleTypeDef hdma_i2c1_tx;
 
 UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_rx;
+DMA_HandleTypeDef hdma_usart1_tx;
 
 /* USER CODE BEGIN PV */
 uint16_t holding_register_database[NUM_HOLDING_REGISTERS] = {
 		0x0001,	// MODBUS_ID
 		0x0003, // BAUD_RATE
-		   100, // Timeout
-		     2, // MB Retry
+		   100, // MB_TRANSMIT_TIMEOUT
+		     2, // MB_TRANSMIT_RETRIES
 		0x0000, // MB_ERRORS
 
 		0x0000, // I2C_ERRORS
 		0x0000, // I2C_SHUTDOWN
 
-		0xFFFF, // ADC 0
-		0xFFFF, // ADC 1
-		0xFFFF, // ADC 2
+		0xFFFF, // ADC_0
+		0xFFFF, // ADC_1
+		0xFFFF, // ADC_2
 
-		0xFFFF, //Laser Distance Sensor
-		0x0000, //GPIO Read
-		0x0000, //GPIO Write
+		0xFFFF, // LASER_DISTANCE
+		0x0000, // GPIO_READ
+		0x0000, // GPIO_WRITE
 
 };
+
+uint16_t prev_gpio_write_register;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_I2C1_Init(void);
@@ -81,6 +91,20 @@ static void MX_I2C1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+
+}
+
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
+{
+
+}
+
+void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
+{
+
+}
 
 /* USER CODE END 0 */
 
@@ -92,7 +116,8 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+	int8_t modbus_status = HAL_OK;
+	uint8_t modbus_tx_len = 0;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -113,22 +138,27 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART1_UART_Init();
   MX_ADC1_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
+  if(HAL_ADC_Start_DMA(&hadc1, (uint32_t*)(&holding_register_database[ADC_0]), 3) != HAL_OK)
+  {
+	  Error_Handler();
+  }
   // Initialise the VL53L0X
-  	statInfo_t_VL53L0X distanceStr;
-  	initVL53L0X(1, &hi2c1);
-
-  	// Configure the sensor for high accuracy and speed in 20 cm.
-  	setSignalRateLimit(200);
-  	setVcselPulsePeriod(VcselPeriodPreRange, 10);
-  	setVcselPulsePeriod(VcselPeriodFinalRange, 14);
-  	setMeasurementTimingBudget(300 * 1000UL);
-
-  	uint16_t distance;
+//  	statInfo_t_VL53L0X distanceStr;
+//  	initVL53L0X(1, &hi2c1);
+//
+//  	// Configure the sensor for high accuracy and speed in 20 cm.
+//  	setSignalRateLimit(200);
+//  	setVcselPulsePeriod(VcselPeriodPreRange, 10);
+//  	setVcselPulsePeriod(VcselPeriodFinalRange, 14);
+//  	setMeasurementTimingBudget(300 * 1000UL);
+//
+//  	uint16_t distance;
 
   /* USER CODE END 2 */
 
@@ -138,8 +168,129 @@ int main(void)
   {
 	  	// uint16_t distance is the distance in millimeters.
 		// statInfo_t_VL53L0X distanceStr is the statistics read from the sensor.
-		distance = readRangeSingleMillimeters(&distanceStr);
+//		distance = readRangeSingleMillimeters(&distanceStr);
 
+	    // Update the GPIO_READ register
+		GPIO_PinState oil_high = HAL_GPIO_ReadPin(Oil_High_GPIO_Port, Oil_High_Pin);
+		GPIO_PinState oil_low = HAL_GPIO_ReadPin(Oil_Low_GPIO_Port, Oil_Low_Pin);
+		GPIO_PinState oil_estop = HAL_GPIO_ReadPin(Oil_E_Stop_GPIO_Port, Oil_E_Stop_Pin);
+
+		holding_register_database[GPIO_READ] = ((oil_high << OIL_HIGH) | (oil_low << OIL_LOW) | (oil_estop << OIL_ESTOP));
+
+		if(prev_gpio_write_register != holding_register_database[GPIO_WRITE])
+		{
+			if((prev_gpio_write_register & MCU_DVA_MASK_A) != (holding_register_database[GPIO_WRITE] & MCU_DVA_MASK_A))
+			{
+				HAL_GPIO_WritePin(MCU_DCV_A_GPIO_Port, MCU_DCV_A_Pin, (holding_register_database[GPIO_WRITE] & MCU_DVA_MASK_A));
+			}
+			if((prev_gpio_write_register & MCU_DVA_MASK_B) != (holding_register_database[GPIO_WRITE] & MCU_DVA_MASK_B))
+			{
+				HAL_GPIO_WritePin(MCU_DCV_B_GPIO_Port, MCU_DCV_B_Pin, (holding_register_database[GPIO_WRITE] & MCU_DVA_MASK_B));
+			}
+			if((prev_gpio_write_register & HPU_GATE_MASK) != (holding_register_database[GPIO_WRITE] & HPU_GATE_MASK))
+			{
+				HAL_GPIO_WritePin(HPU_Gate_GPIO_Port, HPU_Gate_Pin, (holding_register_database[GPIO_WRITE] & HPU_GATE_MASK));
+			}
+			if((prev_gpio_write_register & WATER_SOLINOID_MASK) != (holding_register_database[GPIO_WRITE] & WATER_SOLINOID_MASK))
+			{
+				HAL_GPIO_WritePin(Water_Solinoid_GPIO_Port, Water_Solinoid_Pin, (holding_register_database[GPIO_WRITE] & WATER_SOLINOID_MASK));
+			}
+			prev_gpio_write_register = holding_register_database[GPIO_WRITE];
+		}
+
+		// Handle Modbus Communication
+		if(modbus_rx())
+		{
+			if(get_rx_buffer(0) == holding_register_database[0]) // Check Slave ID
+			{
+				switch(get_rx_buffer(1))
+				{
+					case 0x03:
+					{
+						// Return holding registers
+						modbus_status = return_holding_registers(&modbus_tx_len);
+						break;
+					}
+					case 0x10:
+					{
+						// Write holding registers
+						modbus_status = edit_multiple_registers(&modbus_tx_len);
+						break;
+					}
+					default:
+					{
+						modbus_status = modbus_exception(MB_ILLEGAL_FUNCTION);
+						break;
+					}
+				}
+				if(modbus_status != 0)
+				{
+					holding_register_database[MB_ERRORS] |= 1U << (modbus_status + (MB_FATAL_ERROR - 1));
+				}
+			}
+			// Special case where you retrieve the modbus ID
+			else if((get_rx_buffer(0) == 0xFF) && // modbus_id = 0xFF = 255
+			(get_rx_buffer(1) == 0x03) && // Function code = read_holding_registers
+			(((get_rx_buffer(2) << 8) | get_rx_buffer(3)) == 0x00) && // Address to read = 0
+			(((get_rx_buffer(4) << 8) | get_rx_buffer(5)) == 1)) // # of registers to read = 1
+			{
+				modbus_status = return_holding_registers(&modbus_tx_len);
+				if(modbus_status != 0)
+				{
+					holding_register_database[MB_ERRORS] |= 1U << ((modbus_status - 1) + MB_FATAL_ERROR);
+				}
+			}
+			modbus_status = modbus_set_rx();
+			if(modbus_status != 0)
+			{
+				holding_register_database[MB_ERRORS] |= 1U << ((modbus_status - 1) + MB_FATAL_ERROR);
+			}
+		}
+		modbus_status = monitor_modbus();
+		if(modbus_status != HAL_OK && modbus_status != HAL_BUSY)
+		{
+			switch(modbus_status)
+			{
+				case MB_TX_TIMEOUT:
+				{
+					for(uint8_t i = 0; i < holding_register_database[MB_TRANSMIT_RETRIES]; i++)
+					{
+						modbus_status = modbus_send(modbus_tx_len);
+						if(modbus_status != HAL_OK)
+						{
+							holding_register_database[MB_ERRORS] |= 1U << ((modbus_status - 1) + MB_FATAL_ERROR);
+						}
+					}
+				  break;
+				}
+				case MB_RX_TIMEOUT:
+				{
+					// Error only relates to Modbus Master Nodes
+					break;
+				}
+				case MB_UART_ERROR:
+				{
+					modbus_status = modbus_set_rx();
+					if(modbus_status != 0)
+					{
+						holding_register_database[MB_ERRORS] |= 1U << ((modbus_status - 1) + MB_FATAL_ERROR);
+					}
+					break;
+				}
+				case MB_FATAL_ERROR:
+				{
+					while(modbus_status != HAL_OK)
+					{
+						modbus_status = modbus_reset();
+					}
+					break;
+				}
+				default:
+				{
+					// Unknown error
+				}
+			}
+		}
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -159,10 +310,8 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSIDiv = RCC_HSI_DIV4;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -172,7 +321,7 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSE;
   RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV1;
@@ -207,20 +356,20 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV1;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.ScanConvMode = ADC_SCAN_SEQ_FIXED;
+  hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc1.Init.LowPowerAutoWait = DISABLE;
   hadc1.Init.LowPowerAutoPowerOff = DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
-  hadc1.Init.NbrOfConversion = 0;
-  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
+  hadc1.Init.NbrOfConversion = 3;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc1.Init.DMAContinuousRequests = DISABLE;
   hadc1.Init.Overrun = ADC_OVR_DATA_PRESERVED;
-  hadc1.Init.SamplingTimeCommon1 = ADC_SAMPLETIME_1CYCLE_5;
+  hadc1.Init.SamplingTimeCommon1 = ADC_SAMPLETIME_160CYCLES_5;
+  hadc1.Init.SamplingTimeCommon2 = ADC_SAMPLETIME_1CYCLE_5;
   hadc1.Init.OversamplingMode = DISABLE;
-  hadc1.Init.TriggerFrequencyMode = ADC_TRIGGER_FREQ_HIGH;
+  hadc1.Init.TriggerFrequencyMode = ADC_TRIGGER_FREQ_LOW;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
     Error_Handler();
@@ -229,7 +378,8 @@ static void MX_ADC1_Init(void)
   /** Configure Regular Channel
   */
   sConfig.Channel = ADC_CHANNEL_0;
-  sConfig.Rank = ADC_RANK_CHANNEL_NUMBER;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLINGTIME_COMMON_1;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -238,6 +388,7 @@ static void MX_ADC1_Init(void)
   /** Configure Regular Channel
   */
   sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Rank = ADC_REGULAR_RANK_2;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -246,6 +397,7 @@ static void MX_ADC1_Init(void)
   /** Configure Regular Channel
   */
   sConfig.Channel = ADC_CHANNEL_2;
+  sConfig.Rank = ADC_REGULAR_RANK_3;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -272,7 +424,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x00402D41;
+  hi2c1.Init.Timing = 0x00201D2B;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -349,6 +501,28 @@ static void MX_USART1_UART_Init(void)
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+  /* DMA1_Channel2_3_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel2_3_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel2_3_IRQn);
+  /* DMAMUX1_DMA1_CH4_5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMAMUX1_DMA1_CH4_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMAMUX1_DMA1_CH4_5_IRQn);
 
 }
 
