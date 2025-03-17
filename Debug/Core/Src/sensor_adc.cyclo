@@ -1,9 +1,0 @@
-../Drivers/STM32C0xx_HAL_Driver/Inc/stm32c0xx_ll_adc.h:3672:22:LL_ADC_REG_SetDMATransfer	1
-../Drivers/STM32C0xx_HAL_Driver/Inc/stm32c0xx_ll_adc.h:3705:26:LL_ADC_REG_GetDMATransfer	1
-../Drivers/STM32C0xx_HAL_Driver/Inc/stm32c0xx_ll_adc.h:4566:22:LL_ADC_EnableInternalRegulator	1
-../Drivers/STM32C0xx_HAL_Driver/Inc/stm32c0xx_ll_adc.h:4617:22:LL_ADC_Enable	1
-../Drivers/STM32C0xx_HAL_Driver/Inc/stm32c0xx_ll_adc.h:4656:26:LL_ADC_IsEnabled	2
-../Drivers/STM32C0xx_HAL_Driver/Inc/stm32c0xx_ll_adc.h:4700:22:LL_ADC_StartCalibration	1
-../Drivers/STM32C0xx_HAL_Driver/Inc/stm32c0xx_ll_adc.h:4716:26:LL_ADC_IsCalibrationOnGoing	2
-../Drivers/STM32C0xx_HAL_Driver/Inc/stm32c0xx_ll_adc.h:4890:26:LL_ADC_IsActiveFlag_ADRDY	2
-../Core/Src/sensor_adc.c:62:6:ADC_Activate	10

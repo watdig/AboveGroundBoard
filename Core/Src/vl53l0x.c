@@ -73,14 +73,14 @@ uint8_t msgBuffer[4];
 HAL_StatusTypeDef i2cStat;
 
 
-int8_t getSpadInfo(uint8_t *count, uint8_t *type_is_aperture);
-int8_t getSequenceStepEnables(SequenceStepEnables * enables);
-int8_t getSequenceStepTimeouts(SequenceStepEnables const * enables, SequenceStepTimeouts * timeouts);
-int8_t performSingleRefCalibration(uint8_t vhv_init_byte);
-static uint16_t decodeTimeout(uint16_t value);
-static uint16_t encodeTimeout(uint16_t timeout_mclks);
-static uint32_t timeoutMclksToMicroseconds(uint16_t timeout_period_mclks, uint8_t vcsel_period_pclks);
-static uint32_t timeoutMicrosecondsToMclks(uint32_t timeout_period_us, uint8_t vcsel_period_pclks);
+int8_t vl53l0x_get_spad_info(uint8_t *count, uint8_t *type_is_aperture);
+int8_t vl53l0x_get_sequence_step_enables(SequenceStepEnables * enables);
+int8_t vl53l0x_get_sequence_step_timeouts(SequenceStepEnables const * enables, SequenceStepTimeouts * timeouts);
+int8_t vl53l0x_single_reference_calibration(uint8_t vhv_init_byte);
+static uint16_t vl53l0x_decode_timeout(uint16_t value);
+static uint16_t vl53l0x_encode_timeout(uint16_t timeout_mclks);
+static uint32_t vl53l0x_timeout_mclks_to_us(uint16_t timeout_period_mclks, uint8_t vcsel_period_pclks);
+static uint32_t vl53l0x_timeout_us_to_mclks(uint32_t timeout_period_us, uint8_t vcsel_period_pclks);
 
 //---------------------------------------------------------
 // I2C communication Functions
@@ -89,14 +89,14 @@ static uint32_t timeoutMicrosecondsToMclks(uint32_t timeout_period_us, uint8_t v
 int8_t writeReg(uint8_t reg, uint8_t value)
 {
 	i2c_tx_buffer[0] = value; // Assign the value to the buffer.
-	return HAL_I2C_Mem_Write(&hi2c1, vl53l0x_address | I2C_WRITE, reg, 1, i2c_tx_buffer, 1, I2C_TIMEOUT);
+	return handle_i2c_error(HAL_I2C_Mem_Write(&hi2c1, vl53l0x_address | I2C_WRITE, reg, 1, i2c_tx_buffer, 1, I2C_TIMEOUT));
 }
 
 // Write a 16-bit register
 int8_t writeReg16Bit(uint8_t reg, uint16_t value)
 {
 	memcpy(i2c_tx_buffer, &value, 2); // Assign the value to the buffer.
-	return HAL_I2C_Mem_Write(&hi2c1, vl53l0x_address | I2C_WRITE, reg, 1, i2c_tx_buffer, 2, I2C_TIMEOUT);
+	return handle_i2c_error(HAL_I2C_Mem_Write(&hi2c1, vl53l0x_address | I2C_WRITE, reg, 1, i2c_tx_buffer, 2, I2C_TIMEOUT));
 }
 
 // Write a 32-bit register
@@ -104,7 +104,7 @@ int8_t writeReg32Bit(uint8_t reg, uint32_t value)
 {
 
   memcpy(i2c_tx_buffer, &value, 4); // Assign the value to the buffer.
-  return HAL_I2C_Mem_Write(&hi2c1, vl53l0x_address | I2C_WRITE, reg, 1, i2c_tx_buffer, 4, I2C_TIMEOUT);
+  return handle_i2c_error(HAL_I2C_Mem_Write(&hi2c1, vl53l0x_address | I2C_WRITE, reg, 1, i2c_tx_buffer, 4, I2C_TIMEOUT));
 
 }
 
@@ -113,7 +113,7 @@ int8_t readReg(uint8_t reg, uint8_t* value)
 {
 	int8_t status = HAL_I2C_Mem_Read(&hi2c1, vl53l0x_address | I2C_READ, reg, 1, i2c_rx_buffer, 1, I2C_TIMEOUT);
 	(*value) = i2c_rx_buffer[0];
-	return status;
+	return handle_i2c_error(status);
 }
 
 // Read a 16-bit register
@@ -121,7 +121,7 @@ int8_t readReg16Bit(uint8_t reg, uint16_t* value)
 {
 	int8_t status = HAL_I2C_Mem_Read(&hi2c1, vl53l0x_address | I2C_READ, reg, 1, i2c_rx_buffer, 2, I2C_TIMEOUT);
 	memcpy(value, i2c_rx_buffer, 2);
-	return status;
+	return handle_i2c_error(status);
 }
 
 // Read a 32-bit register
@@ -129,7 +129,7 @@ int8_t readReg32Bit(uint8_t reg, uint32_t* value)
 {
 	int8_t status = HAL_I2C_Mem_Read(&hi2c1, vl53l0x_address | I2C_READ, reg, 1, i2c_rx_buffer, 4, I2C_TIMEOUT);
 	memcpy(value, i2c_rx_buffer, 4);
-	return status;
+	return handle_i2c_error(status);
 }
 
 // Write an arbitrary number of bytes from the given array to the sensor,
@@ -137,27 +137,27 @@ int8_t readReg32Bit(uint8_t reg, uint32_t* value)
 int8_t writeMulti(uint8_t reg, uint8_t const *src, uint8_t count)
 {
 	memcpy(i2c_tx_buffer, src, 4);
-	return HAL_I2C_Mem_Write(&hi2c1, vl53l0x_address | I2C_WRITE, reg, 1, msgBuffer, count, I2C_TIMEOUT);
+	return handle_i2c_error(HAL_I2C_Mem_Write(&hi2c1, vl53l0x_address | I2C_WRITE, reg, 1, msgBuffer, count, I2C_TIMEOUT));
 }
 
 // Read an arbitrary number of bytes from the sensor, starting at the given
 // register, into the given array
 int8_t readMulti(uint8_t reg, uint8_t* dst, uint8_t count)
 {
-	 return HAL_I2C_Mem_Read(&hi2c1, vl53l0x_address | I2C_READ, reg, 1, dst, count, I2C_TIMEOUT);
+	 return handle_i2c_error(HAL_I2C_Mem_Read(&hi2c1, vl53l0x_address | I2C_READ, reg, 1, dst, count, I2C_TIMEOUT));
 }
 
 
 // Public Methods //////////////////////////////////////////////////////////////
 
-int8_t setAddress_VL53L0X(uint8_t new_addr)
+int8_t vl53l0x_set_address(uint8_t new_addr)
 {
   int8_t status = writeReg(I2C_SLAVE_DEVICE_ADDRESS, (new_addr>>1) & 0x7F );
   vl53l0x_address = new_addr;
   return status;
 }
 
-uint8_t getAddress_VL53L0X()
+uint8_t vl53l0x_get_address()
 {
   return vl53l0x_address;
 }
@@ -170,7 +170,7 @@ uint8_t getAddress_VL53L0X()
 // enough unless a cover glass is added.
 // If io_2v8 (optional) is HAL_OK or not given, the sensor is configured for 2V8
 // mode.
-int8_t initVL53L0X(uint8_t io_2v8)
+int8_t vl53l0x_init(uint8_t io_2v8)
 {
 	int8_t status = HAL_OK;
 	uint8_t reg_val = 0;
@@ -181,6 +181,7 @@ int8_t initVL53L0X(uint8_t io_2v8)
 		i2c_tx_buffer[i] = 0;
 		i2c_rx_buffer[i] = 0;
 	}
+	vl53l0x_address = ADDRESS_DEFAULT;
 
 	// Data Initialization
 	// sensor uses 1V8 mode for I/O by default; switch to 2V8 mode if necessary
@@ -219,7 +220,7 @@ int8_t initVL53L0X(uint8_t io_2v8)
 	reg_val = 0;
 
 	// set final range signal rate limit to 0.25 MCPS (million counts per second)
-	status = setSignalRateLimit(0.25);
+	status = vl53l0x_set_signal_rate_limit(0.25);
 	if(status != HAL_OK){return status;}
 
 	status = writeReg(SYSTEM_SEQUENCE_CONFIG, 0xFF);
@@ -228,7 +229,7 @@ int8_t initVL53L0X(uint8_t io_2v8)
 	// Static Initialization
 	uint8_t spad_count;
 	uint8_t spad_type_is_aperture;
-	status = getSpadInfo(&spad_count, &spad_type_is_aperture);
+	status = vl53l0x_get_spad_info(&spad_count, &spad_type_is_aperture);
 	if(status != HAL_OK){return status;}
 
 	// The SPAD map (RefGoodSpadMap) is read by VL53L0X_get_info_from_device() in
@@ -464,8 +465,8 @@ int8_t initVL53L0X(uint8_t io_2v8)
 
 	// -- VL53L0X_SetGpioConfig() end
 
-	status = getMeasurementTimingBudget(&g_measTimBudUs);
-	if(status != HAL_OK){return status;}
+//	status = vl53l0x_get_measurement_timing_budget(&g_measTimBudUs);
+//	if(status != HAL_OK){return status;}
 
 	// "Disable MSRC and TCC by default"
 	// MSRC = Minimum Signal Rate Check
@@ -476,8 +477,8 @@ int8_t initVL53L0X(uint8_t io_2v8)
 	// -- VL53L0X_SetSequenceStepEnable() end
 
 	// "Recalculate timing budget"
-	status = setMeasurementTimingBudget(g_measTimBudUs);
-	if(status != HAL_OK){return status;}
+//	status = vl53l0x_set_measurement_timing_budget(g_measTimBudUs);
+//	if(status != HAL_OK){return status;}
 
 	// VL53L0X_StaticInit() end
 
@@ -486,14 +487,14 @@ int8_t initVL53L0X(uint8_t io_2v8)
 	// -- VL53L0X_perform_vhv_calibration() begin
 	status = writeReg(SYSTEM_SEQUENCE_CONFIG, 0x01);
 	if(status != HAL_OK){return status;}
-	status = performSingleRefCalibration(0x40);
+	status = vl53l0x_single_reference_calibration(0x40);
 	if(status != HAL_OK){return status;}
 	// -- VL53L0X_perform_vhv_calibration() end
 
 	// -- VL53L0X_perform_phase_calibration() begin
 	status = writeReg(SYSTEM_SEQUENCE_CONFIG, 0x02);
 	if(status != HAL_OK){return status;}
-	status = performSingleRefCalibration(0x00);
+	status = vl53l0x_single_reference_calibration(0x00);
 	if(status != HAL_OK){return status;}
 	// -- VL53L0X_perform_phase_calibration() end
 
@@ -513,7 +514,7 @@ int8_t initVL53L0X(uint8_t io_2v8)
 // seems to increase the likelihood of getting an inaccurate reading because of
 // unwanted reflections from objects other than the intended target.
 // Defaults to 0.25 MCPS as initialized by the ST API and this library.
-int8_t setSignalRateLimit(float limit_Mcps)
+int8_t vl53l0x_set_signal_rate_limit(float limit_Mcps)
 {
   if (limit_Mcps < 0 || limit_Mcps > 511.99) { return HAL_ERROR; }
 
@@ -522,7 +523,7 @@ int8_t setSignalRateLimit(float limit_Mcps)
 }
 
 // Get the return signal rate limit check value in MCPS
-int8_t getSignalRateLimit(float* limit_Mcps)
+int8_t vl53l0x_get_signal_rate_limit(float* limit_Mcps)
 {
 	uint16_t reg_val = 0;
 	int8_t status = readReg16Bit(FINAL_RANGE_CONFIG_MIN_COUNT_RATE_RTN_LIMIT, &reg_val);
@@ -537,7 +538,7 @@ int8_t getSignalRateLimit(float* limit_Mcps)
 // factor of N decreases the range measurement standard deviation by a factor of
 // sqrt(N). Defaults to about 33 milliseconds; the minimum is 20 ms.
 // based on VL53L0X_set_measurement_timing_budget_micro_seconds()
-int8_t setMeasurementTimingBudget(uint32_t budget_us)
+int8_t vl53l0x_set_measurement_timing_budget(uint32_t budget_us)
 {
 	int8_t status = HAL_OK;
 	SequenceStepEnables enables;
@@ -557,9 +558,9 @@ int8_t setMeasurementTimingBudget(uint32_t budget_us)
 
 	uint32_t used_budget_us = StartOverhead + EndOverhead;
 
-	status = getSequenceStepEnables(&enables);
+	status = vl53l0x_get_sequence_step_enables(&enables);
 	if(status != HAL_OK){return status;}
-	status = getSequenceStepTimeouts(&enables, &timeouts);
+	status = vl53l0x_get_sequence_step_timeouts(&enables, &timeouts);
 	if(status != HAL_OK){return status;}
 
 	if(enables.tcc)
@@ -607,14 +608,14 @@ int8_t setMeasurementTimingBudget(uint32_t budget_us)
 		//  timeouts must be expressed in macro periods MClks
 		//  because they have different vcsel periods."
 
-		uint16_t final_range_timeout_mclks = timeoutMicrosecondsToMclks(final_range_timeout_us, timeouts.final_range_vcsel_period_pclks);
+		uint16_t final_range_timeout_mclks = vl53l0x_timeout_us_to_mclks(final_range_timeout_us, timeouts.final_range_vcsel_period_pclks);
 
 		if (enables.pre_range)
 		{
 			final_range_timeout_mclks += timeouts.pre_range_mclks;
 		}
 
-		status = writeReg16Bit(FINAL_RANGE_CONFIG_TIMEOUT_MACROP_HI, encodeTimeout(final_range_timeout_mclks));
+		status = writeReg16Bit(FINAL_RANGE_CONFIG_TIMEOUT_MACROP_HI, vl53l0x_encode_timeout(final_range_timeout_mclks));
 		if(status != HAL_OK){return status;}
 		// set_sequence_step_timeout() end
 
@@ -626,7 +627,7 @@ int8_t setMeasurementTimingBudget(uint32_t budget_us)
 // Get the measurement timing budget in microseconds
 // based on VL53L0X_get_measurement_timing_budget_micro_seconds()
 // in us
-int8_t getMeasurementTimingBudget(uint32_t* budget_us)
+int8_t vl53l0x_get_measurement_timing_budget(uint32_t* budget_us)
 {
 	int8_t status = HAL_OK;
 	SequenceStepEnables enables;
@@ -643,9 +644,9 @@ int8_t getMeasurementTimingBudget(uint32_t* budget_us)
 	// "Start and end overhead times always present"
 	(*budget_us) = StartOverhead + EndOverhead;
 
-	status = getSequenceStepEnables(&enables);
+	status = vl53l0x_get_sequence_step_enables(&enables);
 	if(status != HAL_OK){return status;}
-	status = getSequenceStepTimeouts(&enables, &timeouts);
+	status = vl53l0x_get_sequence_step_timeouts(&enables, &timeouts);
 	if(status != HAL_OK){return status;}
 
 	if (enables.tcc)
@@ -683,7 +684,7 @@ int8_t getMeasurementTimingBudget(uint32_t* budget_us)
 //  pre:  12 to 18 (initialized default: 14)
 //  final: 8 to 14 (initialized default: 10)
 // based on VL53L0X_set_vcsel_pulse_period()
-int8_t setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
+int8_t vl53l0x_set_vcsel_pulse_period(vcselPeriodType type, uint8_t period_pclks)
 {
 	int8_t status = HAL_OK;
 	uint8_t vcsel_period_reg = encodeVcselPeriod(period_pclks);
@@ -691,9 +692,9 @@ int8_t setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
 	SequenceStepEnables enables;
 	SequenceStepTimeouts timeouts;
 
-	status = getSequenceStepEnables(&enables);
+	status = vl53l0x_get_sequence_step_enables(&enables);
 	if(status != HAL_OK){return status;}
-	status = getSequenceStepTimeouts(&enables, &timeouts);
+	status = vl53l0x_get_sequence_step_timeouts(&enables, &timeouts);
 	if(status != HAL_OK){return status;}
 
 	// "Apply specific settings for the requested clock period"
@@ -751,15 +752,15 @@ int8_t setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
 		// update timeouts
 		// set_sequence_step_timeout() begin
 		// (SequenceStepId == VL53L0X_SEQUENCESTEP_PRE_RANGE)
-		uint16_t new_pre_range_timeout_mclks = timeoutMicrosecondsToMclks(timeouts.pre_range_us, period_pclks);
+		uint16_t new_pre_range_timeout_mclks = vl53l0x_timeout_us_to_mclks(timeouts.pre_range_us, period_pclks);
 
-		status = writeReg16Bit(PRE_RANGE_CONFIG_TIMEOUT_MACROP_HI, encodeTimeout(new_pre_range_timeout_mclks));
+		status = writeReg16Bit(PRE_RANGE_CONFIG_TIMEOUT_MACROP_HI, vl53l0x_encode_timeout(new_pre_range_timeout_mclks));
 		if(status != HAL_OK){return status;}
 		// set_sequence_step_timeout() end
 
 		// set_sequence_step_timeout() begin
 		// (SequenceStepId == VL53L0X_SEQUENCESTEP_MSRC)
-		uint16_t new_msrc_timeout_mclks = timeoutMicrosecondsToMclks(timeouts.msrc_dss_tcc_us, period_pclks);
+		uint16_t new_msrc_timeout_mclks = vl53l0x_timeout_us_to_mclks(timeouts.msrc_dss_tcc_us, period_pclks);
 		status = writeReg(MSRC_CONFIG_TIMEOUT_MACROP, (new_msrc_timeout_mclks > 256) ? 255 : (new_msrc_timeout_mclks - 1));
 		if(status != HAL_OK){return status;}
 		// set_sequence_step_timeout() end
@@ -856,13 +857,13 @@ int8_t setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
 		//  must be added. To do this both final and pre-range
 		//  timeouts must be expressed in macro periods MClks
 		//  because they have different vcsel periods."
-		uint16_t new_final_range_timeout_mclks = timeoutMicrosecondsToMclks(timeouts.final_range_us, period_pclks);
+		uint16_t new_final_range_timeout_mclks = vl53l0x_timeout_us_to_mclks(timeouts.final_range_us, period_pclks);
 
 		if (enables.pre_range)
 		{
 			new_final_range_timeout_mclks += timeouts.pre_range_mclks;
 		}
-		status = writeReg16Bit(FINAL_RANGE_CONFIG_TIMEOUT_MACROP_HI, encodeTimeout(new_final_range_timeout_mclks));
+		status = writeReg16Bit(FINAL_RANGE_CONFIG_TIMEOUT_MACROP_HI, vl53l0x_encode_timeout(new_final_range_timeout_mclks));
 		if(status != HAL_OK){return status;}
 		// set_sequence_step_timeout end
 	}
@@ -873,7 +874,7 @@ int8_t setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
 	}
 
 	// "Finally, the timing budget must be re-applied"
-	status = setMeasurementTimingBudget(g_measTimBudUs);
+	status = vl53l0x_set_measurement_timing_budget(g_measTimBudUs);
 	if(status != HAL_OK){return status;}
 
 
@@ -885,7 +886,7 @@ int8_t setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
 	if(status != HAL_OK){return status;}
 	status = writeReg(SYSTEM_SEQUENCE_CONFIG, 0x02);
 	if(status != HAL_OK){return status;}
-	status = performSingleRefCalibration(0x0);
+	status = vl53l0x_single_reference_calibration(0x0);
 	if(status != HAL_OK){return status;}
 	status = writeReg(SYSTEM_SEQUENCE_CONFIG, sequence_config);
 	// VL53L0X_perform_phase_calibration() end
@@ -895,7 +896,7 @@ int8_t setVcselPulsePeriod(vcselPeriodType type, uint8_t period_pclks)
 
 // Get the VCSEL pulse period in PCLKs for the given period type.
 // based on VL53L0X_get_vcsel_pulse_period()
-int8_t getVcselPulsePeriod(vcselPeriodType type, uint8_t* period_pclks)
+int8_t vl53l0x_get_vcsel_pulse_period(vcselPeriodType type, uint8_t* period_pclks)
 {
 	int8_t status = HAL_OK;
 	uint8_t reg_value = 0;
@@ -924,7 +925,7 @@ int8_t getVcselPulsePeriod(vcselPeriodType type, uint8_t* period_pclks)
 // inter-measurement period in milliseconds determining how often the sensor
 // takes a measurement.
 // based on VL53L0X_StartMeasurement()
-int8_t startContinuous(uint32_t period_ms)
+int8_t vl53l0x_start_continuous(uint32_t period_ms)
 {
 	int8_t status = HAL_OK;
 
@@ -972,7 +973,7 @@ int8_t startContinuous(uint32_t period_ms)
 
 // Stop continuous measurements
 // based on VL53L0X_StopMeasurement()
-int8_t stopContinuous()
+int8_t vl53l0x_stop_continuous()
 {
 	int8_t status = HAL_OK;
 	status = writeReg(SYSRANGE_START, 0x01); // VL53L0X_REG_SYSRANGE_MODE_SINGLESHOT
@@ -992,10 +993,10 @@ int8_t stopContinuous()
 }
 
 // Returns a range reading in millimeters when continuous mode is active
-// (readRangeSingleMillimeters() also calls this function after starting a
+// (vl53l0x_read_range_single() also calls this function after starting a
 // single-shot range measurement)
 // extraStats provides additional info for this measurment. Set to 0 if not needed.
-int8_t readRangeContinuousMillimeters( statInfo_t_VL53L0X *extraStats, uint16_t* range_mm)
+int8_t vl53l0x_read_range_continuous( statInfo_t_VL53L0X *extraStats, uint16_t* range_mm)
 {
 	int8_t status = HAL_OK;
 	uint8_t reg_val = 0;
@@ -1048,7 +1049,7 @@ int8_t readRangeContinuousMillimeters( statInfo_t_VL53L0X *extraStats, uint16_t*
 // millimeters
 // based on VL53L0X_PerformSingleRangingMeasurement()
 // extraStats provides additional info for this measurment. Set to 0 if not needed.
-int8_t readRangeSingleMillimeters(statInfo_t_VL53L0X *extraStats, uint16_t* range_mm)
+int8_t vl53l0x_read_range_single(statInfo_t_VL53L0X *extraStats, uint16_t* range_mm)
 {
 	int8_t status = HAL_OK;
 	uint8_t reg_val = 1;
@@ -1081,24 +1082,24 @@ int8_t readRangeSingleMillimeters(statInfo_t_VL53L0X *extraStats, uint16_t* rang
 			return HAL_ERROR;
 		}
 	}
-	return readRangeContinuousMillimeters(extraStats, range_mm);
+	return vl53l0x_read_range_continuous(extraStats, range_mm);
 }
 
 // Did a timeout occur in one of the read functions since the last call to
-// timeoutOccurred()?
-uint8_t timeoutOccurred()
+// vl53l0x_timeout()?
+uint8_t vl53l0x_timeout()
 {
   uint8_t tmp = g_isTimeout;
   g_isTimeout = HAL_ERROR;
   return tmp;
 }
 
-void setTimeout(uint16_t timeout)
+void vl53l0x_set_timeout(uint16_t timeout)
 {
   g_ioTimeout = timeout;
 }
 
-uint16_t getTimeout()
+uint16_t vl53l0x_get_timeout()
 {
   return g_ioTimeout;
 }
@@ -1108,7 +1109,7 @@ uint16_t getTimeout()
 // Get reference SPAD (single photon avalanche diode) count and type
 // based on VL53L0X_get_info_from_device(),
 // but only gets reference SPAD count and type
-int8_t getSpadInfo(uint8_t * count, uint8_t * type_is_aperture)
+int8_t vl53l0x_get_spad_info(uint8_t * count, uint8_t * type_is_aperture)
 {
 	int8_t status = HAL_OK;
 	uint8_t reg_val = 0;
@@ -1180,8 +1181,8 @@ int8_t getSpadInfo(uint8_t * count, uint8_t * type_is_aperture)
 }
 
 // Get sequence step enables
-// based on VL53L0X_GetSequenceStepEnables()
-int8_t getSequenceStepEnables(SequenceStepEnables * enables)
+// based on VL53L0X_vl53l0x_get_sequence_step_enables()
+int8_t vl53l0x_get_sequence_step_enables(SequenceStepEnables * enables)
 {
 	int8_t status = HAL_OK;
 	uint8_t sequence_config = 0;
@@ -1201,37 +1202,37 @@ int8_t getSequenceStepEnables(SequenceStepEnables * enables)
 // based on get_sequence_step_timeout(),
 // but gets all timeouts instead of just the requested one, and also stores
 // intermediate values
-int8_t getSequenceStepTimeouts(SequenceStepEnables const * enables, SequenceStepTimeouts * timeouts)
+int8_t vl53l0x_get_sequence_step_timeouts(SequenceStepEnables const * enables, SequenceStepTimeouts * timeouts)
 {
 	int8_t status = HAL_OK;
 	uint8_t reg_val_8 = 0;
 	uint16_t reg_val_16 = 0;
 
-	status = getVcselPulsePeriod(VcselPeriodPreRange, &reg_val_8);
+	status = vl53l0x_get_vcsel_pulse_period(VcselPeriodPreRange, &reg_val_8);
 	if(status != HAL_OK){return status;}
 	timeouts->pre_range_vcsel_period_pclks = reg_val_8;
 
-	status = readReg(MSRC_CONFIG_TIMEOUT_MACROP, &reg_val_8) + 1;
+	status = readReg(MSRC_CONFIG_TIMEOUT_MACROP, &reg_val_8);
 	if(status != HAL_OK){return status;}
 	timeouts->msrc_dss_tcc_mclks = reg_val_8 + 1;
 	timeouts->msrc_dss_tcc_us =
-	timeoutMclksToMicroseconds(timeouts->msrc_dss_tcc_mclks,
+	vl53l0x_timeout_mclks_to_us(timeouts->msrc_dss_tcc_mclks,
 						   timeouts->pre_range_vcsel_period_pclks);
 
 	status = readReg16Bit(PRE_RANGE_CONFIG_TIMEOUT_MACROP_HI, &reg_val_16);
 	if(status != HAL_OK){return status;}
-	timeouts->pre_range_mclks = decodeTimeout(reg_val_16);
+	timeouts->pre_range_mclks = vl53l0x_decode_timeout(reg_val_16);
 	timeouts->pre_range_us =
-	timeoutMclksToMicroseconds(timeouts->pre_range_mclks,
+	vl53l0x_timeout_mclks_to_us(timeouts->pre_range_mclks,
 						   timeouts->pre_range_vcsel_period_pclks);
 
-	status = getVcselPulsePeriod(VcselPeriodFinalRange, &reg_val_8);
+	status = vl53l0x_get_vcsel_pulse_period(VcselPeriodFinalRange, &reg_val_8);
 	if(status != HAL_OK){return status;}
 	timeouts->final_range_vcsel_period_pclks = reg_val_8;
 
 	status = readReg16Bit(FINAL_RANGE_CONFIG_TIMEOUT_MACROP_HI, &reg_val_16);
 	if(status != HAL_OK){return status;}
-	timeouts->final_range_mclks = decodeTimeout(reg_val_16);
+	timeouts->final_range_mclks = vl53l0x_decode_timeout(reg_val_16);
 
 	if (enables->pre_range)
 	{
@@ -1239,7 +1240,7 @@ int8_t getSequenceStepTimeouts(SequenceStepEnables const * enables, SequenceStep
 	}
 
 	timeouts->final_range_us =
-	timeoutMclksToMicroseconds(timeouts->final_range_mclks,
+	vl53l0x_timeout_mclks_to_us(timeouts->final_range_mclks,
 						   timeouts->final_range_vcsel_period_pclks);
 	return status;
 }
@@ -1248,7 +1249,7 @@ int8_t getSequenceStepTimeouts(SequenceStepEnables const * enables, SequenceStep
 // based on VL53L0X_decode_timeout()
 // Note: the original function returned a uint32_t, but the return value is
 // always stored in a uint16_t.
-uint16_t decodeTimeout(uint16_t reg_val)
+uint16_t vl53l0x_decode_timeout(uint16_t reg_val)
 {
 	// format: "(LSByte * 2^MSByte) + 1"
 	return (uint16_t)((reg_val & 0x00FF) <<
@@ -1259,7 +1260,7 @@ uint16_t decodeTimeout(uint16_t reg_val)
 // based on VL53L0X_encode_timeout()
 // Note: the original function took a uint16_t, but the argument passed to it
 // is always a uint16_t.
-uint16_t encodeTimeout(uint16_t timeout_mclks)
+uint16_t vl53l0x_encode_timeout(uint16_t timeout_mclks)
 {
 	// format: "(LSByte * 2^MSByte) + 1"
 	uint32_t ls_byte = 0;
@@ -1285,7 +1286,7 @@ uint16_t encodeTimeout(uint16_t timeout_mclks)
 
 // Convert sequence step timeout from MCLKs to microseconds with given VCSEL period in PCLKs
 // based on VL53L0X_calc_timeout_us()
-uint32_t timeoutMclksToMicroseconds(uint16_t timeout_period_mclks, uint8_t vcsel_period_pclks)
+uint32_t vl53l0x_timeout_mclks_to_us(uint16_t timeout_period_mclks, uint8_t vcsel_period_pclks)
 {
 	uint32_t macro_period_ns = calcMacroPeriod(vcsel_period_pclks);
 
@@ -1294,7 +1295,7 @@ uint32_t timeoutMclksToMicroseconds(uint16_t timeout_period_mclks, uint8_t vcsel
 
 // Convert sequence step timeout from microseconds to MCLKs with given VCSEL period in PCLKs
 // based on VL53L0X_calc_timeout_mclks()
-uint32_t timeoutMicrosecondsToMclks(uint32_t timeout_period_us, uint8_t vcsel_period_pclks)
+uint32_t vl53l0x_timeout_us_to_mclks(uint32_t timeout_period_us, uint8_t vcsel_period_pclks)
 {
 	uint32_t macro_period_ns = calcMacroPeriod(vcsel_period_pclks);
 
@@ -1303,7 +1304,7 @@ uint32_t timeoutMicrosecondsToMclks(uint32_t timeout_period_us, uint8_t vcsel_pe
 
 
 // based on VL53L0X_perform_single_ref_calibration()
-int8_t performSingleRefCalibration(uint8_t vhv_init_byte)
+int8_t vl53l0x_single_reference_calibration(uint8_t vhv_init_byte)
 {
 	int8_t status = HAL_OK;
 	uint8_t reg_val = 0;
@@ -1327,4 +1328,36 @@ int8_t performSingleRefCalibration(uint8_t vhv_init_byte)
 	status = writeReg(SYSRANGE_START, 0x00);
 
 	return HAL_OK;
+}
+
+int8_t handle_i2c_error(int8_t status)
+{
+
+	if(status != HAL_OK)
+	{
+		int8_t reset_status = HAL_OK;
+		holding_register_database[I2C_ERRORS] |= hi2c1.ErrorCode;
+		// Attempt to reset the peripheral
+		reset_status = i2c_reset();
+		if(reset_status != HAL_OK)
+		{
+			// I2C Fatal Error
+			holding_register_database[I2C_ERRORS] |= 1U << 10U;
+			holding_register_database[I2C_SHUTDOWN] = 1;
+		}
+	}
+	return status;
+}
+
+int8_t i2c_reset()
+{
+	int8_t status = HAL_OK;
+	status |= HAL_I2C_DeInit(&hi2c1);
+	__I2C1_FORCE_RESET();
+	HAL_Delay(100);
+	__I2C1_RELEASE_RESET();
+	status = HAL_I2C_Init(&hi2c1);
+	status |= HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE);
+	status |= HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0);
+	return status;
 }

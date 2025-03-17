@@ -43,8 +43,11 @@ typedef enum holding_register_e
 	MB_TRANSMIT_TIMEOUT,
 	MB_TRANSMIT_RETRIES,
 	MB_ERRORS,
+	VL53L0X_ERRORS,
 	I2C_ERRORS,
 	I2C_SHUTDOWN,
+	ADC_ERRORS,
+	ADC_SHUTDOWN,
 	ADC_0,
 	ADC_1,
 	ADC_2,
@@ -64,13 +67,12 @@ typedef enum gpio_read_e
 
 typedef enum gpio_write_e
 {
-	MCU_DVA_A,
-	MCU_DVA_B,
+	MCU_DCV_A,
+	MCU_DCV_B,
 	HPU_GATE,
 	WATER_SOLINOID,
 	NUM_GPIO_WRITE_PINS
 }gpio_write_t;
-
 
 
 /* USER CODE END ET */
@@ -84,8 +86,8 @@ typedef enum gpio_write_e
 #define USE_TIMEOUT 1
 
 // GPIO_WRITE MASKS
-#define MCU_DVA_MASK_A (1 << MCU_DVA_A)
-#define MCU_DVA_MASK_B (1 << MCU_DVA_B)
+#define MCU_DCV_A_MASK (1 << MCU_DCV_A)
+#define MCU_DCV_B_MASK (1 << MCU_DCV_B)
 #define HPU_GATE_MASK (1 << HPU_GATE)
 #define WATER_SOLINOID_MASK (1 << WATER_SOLINOID)
 

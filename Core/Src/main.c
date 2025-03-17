@@ -55,7 +55,7 @@ DMA_HandleTypeDef hdma_usart1_tx;
 
 /* USER CODE BEGIN PV */
 uint16_t holding_register_database[NUM_HOLDING_REGISTERS] = {
-		0x0001,	// MODBUS_ID
+		0x0006,	// MODBUS_ID
 		0x0003, // BAUD_RATE
 		   100, // MB_TRANSMIT_TIMEOUT
 		     2, // MB_TRANSMIT_RETRIES
@@ -71,11 +71,10 @@ uint16_t holding_register_database[NUM_HOLDING_REGISTERS] = {
 		0xFFFF, // LASER_DISTANCE
 		0x0000, // GPIO_READ
 		0x0000, // GPIO_WRITE
-
 };
 
 uint16_t prev_gpio_write_register;
-
+volatile uint8_t adc_err_int;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -86,24 +85,43 @@ static void MX_USART1_UART_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
-
+int8_t adc_reset();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+
+int8_t adc_reset()
 {
+	int8_t status = HAL_OK;
+	status = HAL_ADC_Stop_DMA(&hadc1);
+	status |= HAL_ADC_DeInit(&hadc1);
+	__HAL_RCC_ADC_FORCE_RESET();
+	HAL_Delay(10);
+	__HAL_RCC_ADC_RELEASE_RESET();
+	HAL_Delay(10);
+	status |= HAL_ADC_Init(&hadc1);
 
-}
+	ADC_ChannelConfTypeDef sConfig = {0};
 
-void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
-{
+	sConfig.Channel = ADC_CHANNEL_0;
+	sConfig.Rank = ADC_REGULAR_RANK_1;
+	sConfig.SamplingTime = ADC_SAMPLINGTIME_COMMON_1;
+	status |= HAL_ADC_ConfigChannel(&hadc1, &sConfig);
 
+	sConfig.Channel = ADC_CHANNEL_1;
+	sConfig.Rank = ADC_REGULAR_RANK_2;
+	status |= HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+
+	sConfig.Channel = ADC_CHANNEL_2;
+	sConfig.Rank = ADC_REGULAR_RANK_3;
+	status |= HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+	return status;
 }
 
 void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
 {
-
+	adc_err_int = 1U;
 }
 
 /* USER CODE END 0 */
@@ -117,7 +135,10 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
 	int8_t modbus_status = HAL_OK;
+	int8_t i2c_status = HAL_OK;
+	int8_t adc_status = HAL_OK;
 	uint8_t modbus_tx_len = 0;
+	uint8_t prev_adc_shutdown = 0;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -144,21 +165,47 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
-  if(HAL_ADC_Start_DMA(&hadc1, (uint32_t*)(&holding_register_database[ADC_0]), 3) != HAL_OK)
-  {
-	  Error_Handler();
-  }
-  // Initialise the VL53L0X
-//  	statInfo_t_VL53L0X distanceStr;
-//  	initVL53L0X(1, &hi2c1);
-//
-//  	// Configure the sensor for high accuracy and speed in 20 cm.
-//  	setSignalRateLimit(200);
-//  	setVcselPulsePeriod(VcselPeriodPreRange, 10);
-//  	setVcselPulsePeriod(VcselPeriodFinalRange, 14);
-//  	setMeasurementTimingBudget(300 * 1000UL);
-//
-//  	uint16_t distance;
+    if(modbus_set_rx() != HAL_OK)
+    {
+    	Error_Handler();
+    }
+
+	if(HAL_ADC_Start_DMA(&hadc1, (uint32_t*)(&holding_register_database[ADC_0]), 3) != HAL_OK)
+	{
+		Error_Handler();
+	}
+
+	adc_err_int = 0U;
+
+	// Initialise the VL53L0X
+	statInfo_t_VL53L0X* distanceStr = 0;
+	i2c_status = vl53l0x_init(1);
+	if(i2c_status != HAL_OK)
+	{
+		holding_register_database[VL53L0X_ERRORS] |= (1U << VL53L0X_INIT_ERROR);
+	}
+
+	// Configure the sensor for high accuracy and speed in 20 cm.
+	i2c_status = vl53l0x_set_signal_rate_limit(200);
+	if(i2c_status != HAL_OK)
+	{
+		holding_register_database[VL53L0X_ERRORS] |= (1U << VL53L0X_SIGNAL_RATE_LIMIT_ERROR);
+	}
+	i2c_status |= vl53l0x_set_measurement_timing_budget(300 * 1000UL);
+	if(i2c_status != HAL_OK)
+	{
+		holding_register_database[VL53L0X_ERRORS] |= (1U << VL53L0X_TIMING_BUDGET_ERROR);
+	}
+	i2c_status |= vl53l0x_set_vcsel_pulse_period(VcselPeriodPreRange, 18);
+	if(i2c_status != HAL_OK)
+	{
+		holding_register_database[VL53L0X_ERRORS] |= (1U << VL53L0X_VCSEL_PULSE_ERROR);
+	}
+	i2c_status |= vl53l0x_set_vcsel_pulse_period(VcselPeriodFinalRange, 14);
+	if(i2c_status != HAL_OK)
+	{
+		holding_register_database[VL53L0X_ERRORS] |= (1U << VL53L0X_VCSEL_PULSE_ERROR);
+	}
 
   /* USER CODE END 2 */
 
@@ -166,10 +213,6 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  	// uint16_t distance is the distance in millimeters.
-		// statInfo_t_VL53L0X distanceStr is the statistics read from the sensor.
-//		distance = readRangeSingleMillimeters(&distanceStr);
-
 	    // Update the GPIO_READ register
 		GPIO_PinState oil_high = HAL_GPIO_ReadPin(Oil_High_GPIO_Port, Oil_High_Pin);
 		GPIO_PinState oil_low = HAL_GPIO_ReadPin(Oil_Low_GPIO_Port, Oil_Low_Pin);
@@ -179,13 +222,83 @@ int main(void)
 
 		if(prev_gpio_write_register != holding_register_database[GPIO_WRITE])
 		{
-			if((prev_gpio_write_register & MCU_DVA_MASK_A) != (holding_register_database[GPIO_WRITE] & MCU_DVA_MASK_A))
+			if((prev_gpio_write_register & MCU_DCV_A_MASK) != (holding_register_database[GPIO_WRITE] & MCU_DCV_A_MASK))
 			{
-				HAL_GPIO_WritePin(MCU_DCV_A_GPIO_Port, MCU_DCV_A_Pin, (holding_register_database[GPIO_WRITE] & MCU_DVA_MASK_A));
+				// If A wants to be high
+				if((holding_register_database[GPIO_WRITE] & MCU_DCV_A_MASK) != 0)
+				{
+					// If B wants to be low
+					if((holding_register_database[GPIO_WRITE] & MCU_DCV_B_MASK) == 0)
+					{
+						// If B is high but B wants to be low
+						if((prev_gpio_write_register & MCU_DCV_B_MASK) != 0)
+						{
+							// Write B low first
+							HAL_GPIO_WritePin(MCU_DCV_B_GPIO_Port, MCU_DCV_B_Pin,(holding_register_database[GPIO_WRITE] & MCU_DCV_B_MASK));
+							HAL_Delay(100); // Wait a few seconds for safety
+						}
+					}
+					// If B wants to be high -> FORBIDDEN
+					else
+					{
+						// If B is high
+						if((prev_gpio_write_register & MCU_DCV_B_MASK) != 0)
+						{
+							// Cancel the user request, clear the A bit
+							holding_register_database[GPIO_WRITE] &= ~ MCU_DCV_A_MASK;
+						}
+						// If A and B both want to be set high from a low state
+						else
+						{
+							// Cancel the user request, clear the A and B bit
+							holding_register_database[GPIO_WRITE] &= ~ (MCU_DCV_A_MASK | MCU_DCV_B_MASK);
+						}
+					}
+				}
+				// If A wants to be low
+				else
+				{
+					HAL_GPIO_WritePin(MCU_DCV_A_GPIO_Port, MCU_DCV_A_Pin, (holding_register_database[GPIO_WRITE] & MCU_DCV_A_MASK));
+				}
 			}
-			if((prev_gpio_write_register & MCU_DVA_MASK_B) != (holding_register_database[GPIO_WRITE] & MCU_DVA_MASK_B))
+			if((prev_gpio_write_register & MCU_DCV_B_MASK) != (holding_register_database[GPIO_WRITE] & MCU_DCV_B_MASK))
 			{
-				HAL_GPIO_WritePin(MCU_DCV_B_GPIO_Port, MCU_DCV_B_Pin, (holding_register_database[GPIO_WRITE] & MCU_DVA_MASK_B));
+				// If B wants to be high
+				if((holding_register_database[GPIO_WRITE] & MCU_DCV_B_MASK) != 0)
+				{
+					// If A wants to be low
+					if((holding_register_database[GPIO_WRITE] & MCU_DCV_A_MASK) == 0)
+					{
+						// If A is high but A wants to be low
+						if((prev_gpio_write_register & MCU_DCV_A_MASK) != 0)
+						{
+							// Write A low first
+							HAL_GPIO_WritePin(MCU_DCV_A_GPIO_Port, MCU_DCV_A_Pin,(holding_register_database[GPIO_WRITE] & MCU_DCV_A_MASK));
+							HAL_Delay(100); // Wait a few seconds for safety
+						}
+					}
+					// If A wants to be high -> FORBIDDEN
+					else
+					{
+						// If A is high
+						if((prev_gpio_write_register & MCU_DCV_A_MASK) != 0)
+						{
+							// Cancel the user request, clear the B bit
+							holding_register_database[GPIO_WRITE] &= ~ MCU_DCV_B_MASK;
+						}
+						// If A and B both want to be set high from a low state
+						else
+						{
+							// Cancel the user request, clear the A and B bit
+							holding_register_database[GPIO_WRITE] &= ~ (MCU_DCV_A_MASK | MCU_DCV_B_MASK);
+						}
+					}
+				}
+				// If B wants to be low
+				else
+				{
+					HAL_GPIO_WritePin(MCU_DCV_B_GPIO_Port, MCU_DCV_B_Pin, (holding_register_database[GPIO_WRITE] & MCU_DCV_B_MASK));
+				}
 			}
 			if((prev_gpio_write_register & HPU_GATE_MASK) != (holding_register_database[GPIO_WRITE] & HPU_GATE_MASK))
 			{
@@ -201,7 +314,7 @@ int main(void)
 		// Handle Modbus Communication
 		if(modbus_rx())
 		{
-			if(get_rx_buffer(0) == holding_register_database[0]) // Check Slave ID
+			if(get_rx_buffer(0) == holding_register_database[MODBUS_ID]) // Check Slave ID
 			{
 				switch(get_rx_buffer(1))
 				{
@@ -291,6 +404,66 @@ int main(void)
 				}
 			}
 		}
+
+		// Handle I2C Communication
+		if(!holding_register_database[I2C_SHUTDOWN])
+		{
+			// statInfo_t_VL53L0X distanceStr is the statistics read from the sensor.
+			i2c_status = vl53l0x_read_range_single(distanceStr, &holding_register_database[LASER_DISTANCE]);
+			if(i2c_status != HAL_OK)
+			{
+				holding_register_database[VL53L0X_ERRORS] |= (1U << VL53L0X_AQUISITION_ERROR);
+			}
+		}
+
+		// Handle ADC Errors
+
+		if(adc_err_int != 0U)
+		{
+			adc_err_int = 0U;
+			holding_register_database[ADC_ERRORS] |= hadc1.ErrorCode;
+			adc_status = adc_reset();
+			if(adc_status != HAL_OK)
+			{
+				// Fatal Error
+				holding_register_database[ADC_ERRORS] |= (1U << 5U);
+				holding_register_database[ADC_SHUTDOWN] = 1;
+				prev_adc_shutdown = 1;
+			}
+			else
+			{
+				HAL_ADC_Start_DMA(&hadc1, (uint32_t*)(&holding_register_database[ADC_0]), 3);
+			}
+		}
+		if(prev_adc_shutdown != holding_register_database[ADC_SHUTDOWN])
+		{
+			if(prev_adc_shutdown == 1)
+			{
+				prev_adc_shutdown = 0;
+				adc_status = adc_reset();
+				if(adc_status != HAL_OK)
+				{
+					// Fatal Error
+					holding_register_database[ADC_ERRORS] |= (1U << 5U);
+					holding_register_database[ADC_SHUTDOWN] = 1;
+				}
+				else
+				{
+					HAL_ADC_Start_DMA(&hadc1, (uint32_t*)(&holding_register_database[ADC_0]), 3);
+				}
+			}
+			else
+			{
+				adc_status = adc_reset();
+				if(adc_status != HAL_OK)
+				{
+					// Fatal Error
+					holding_register_database[ADC_ERRORS] |= (1U << 5U);
+				}
+			}
+			prev_adc_shutdown = holding_register_database[ADC_SHUTDOWN];
+		}
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -472,7 +645,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
+  huart1.Init.BaudRate = 9600;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
@@ -560,13 +733,13 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : Oil_High_Pin */
   GPIO_InitStruct.Pin = Oil_High_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(Oil_High_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : Oil_Low_Pin Oil_E_Stop_Pin */
   GPIO_InitStruct.Pin = Oil_Low_Pin|Oil_E_Stop_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   /*Configure GPIO pin : Water_Solinoid_Pin */
