@@ -236,6 +236,9 @@ int main(void)
 							// Write B low first
 							HAL_GPIO_WritePin(MCU_DCV_B_GPIO_Port, MCU_DCV_B_Pin,(holding_register_database[GPIO_WRITE] & MCU_DCV_B_MASK));
 							HAL_Delay(100); // Wait a few seconds for safety
+							HAL_GPIO_WritePin(MCU_DCV_A_GPIO_Port, MCU_DCV_A_Pin,(holding_register_database[GPIO_WRITE] & MCU_DCV_A_MASK));
+							// Clear B for the prev_gpio_write_register
+							prev_gpio_write_register &= ~ MCU_DCV_B_MASK;
 						}
 					}
 					// If B wants to be high -> FORBIDDEN
@@ -275,6 +278,9 @@ int main(void)
 							// Write A low first
 							HAL_GPIO_WritePin(MCU_DCV_A_GPIO_Port, MCU_DCV_A_Pin,(holding_register_database[GPIO_WRITE] & MCU_DCV_A_MASK));
 							HAL_Delay(100); // Wait a few seconds for safety
+							HAL_GPIO_WritePin(MCU_DCV_B_GPIO_Port, MCU_DCV_B_Pin,(holding_register_database[GPIO_WRITE] & MCU_DCV_B_MASK));
+							// Clear A for the prev_gpio_write_register
+							prev_gpio_write_register &= ~ MCU_DCV_A_MASK;
 						}
 					}
 					// If A wants to be high -> FORBIDDEN
@@ -438,7 +444,6 @@ int main(void)
 		{
 			if(prev_adc_shutdown == 1)
 			{
-				prev_adc_shutdown = 0;
 				adc_status = adc_reset();
 				if(adc_status != HAL_OK)
 				{
