@@ -385,7 +385,6 @@ int main(void)
 				}
 				case MB_UART_ERROR:
 				{
-					modbus_status = modbus_set_rx();
 					if(modbus_status != 0)
 					{
 						holding_register_database[MB_ERRORS] |= 1U << ((modbus_status) + (MB_FATAL_ERROR - RANGE_ERROR));
@@ -398,7 +397,6 @@ int main(void)
 					{
 						modbus_status = modbus_reset();
 					}
-					modbus_status = modbus_set_rx();
 					if(modbus_status != 0)
 					{
 						holding_register_database[MB_ERRORS] |= 1U << ((modbus_status) + (MB_FATAL_ERROR - RANGE_ERROR));
