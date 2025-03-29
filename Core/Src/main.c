@@ -57,7 +57,7 @@ DMA_HandleTypeDef hdma_usart1_tx;
 uint16_t holding_register_database[NUM_HOLDING_REGISTERS] = {
 		0x0006,	// MODBUS_ID
 		0x0003, // BAUD_RATE
-		   100, // MB_TRANSMIT_TIMEOUT
+		   500, // MB_TRANSMIT_TIMEOUT
 		     2, // MB_TRANSMIT_RETRIES
 		0x0000, // MB_ERRORS
 
@@ -370,6 +370,7 @@ int main(void)
 					for(uint8_t i = 0; i < holding_register_database[MB_TRANSMIT_RETRIES]; i++)
 					{
 						modbus_status = modbus_send(modbus_tx_len);
+						while(monitor_modbus() == HAL_BUSY);
 						if(modbus_status != HAL_OK)
 						{
 							holding_register_database[MB_ERRORS] |= 1U << ((modbus_status) + (MB_FATAL_ERROR - RANGE_ERROR));
