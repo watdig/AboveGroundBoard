@@ -502,6 +502,22 @@ void handle_range(uint16_t holding_register)
 			}
 			break;
 		}
+		case ADC_ERRORS:
+		{
+			if(holding_register_database[holding_register] > 0xF)
+			{
+				holding_register_database[holding_register] = 0xF;
+			}
+			break;
+		}
+		case ADC_SHUTDOWN:
+		{
+			if(holding_register_database[holding_register] > 1)
+			{
+				holding_register_database[holding_register] = 1;
+			}
+			break;
+		}
 		case GPIO_WRITE:
 		{
 			if(holding_register_database[holding_register] > 0xF)
